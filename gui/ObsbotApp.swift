@@ -1135,14 +1135,14 @@ struct PanelView: View {
                         get: { model.keepMicLiveDuringCalls },
                         set: { model.setKeepMicLiveDuringCalls($0) }
                     )) {
-                        Text("Keep mic live during calls")
+                        Text("Wake mic when apps need it")
                             .font(.system(size: 11.5, weight: .medium, design: .rounded))
                             .foregroundColor(Aperture.text)
                     }
                     .toggleStyle(ApertureToggleStyle())
 
                     if model.keepMicLiveDuringCalls {
-                        Text("Camera light stays on while an app uses the mic.")
+                        Text("Turns the camera on only while an app uses the mic, so the mic works. The camera light comes on then.")
                             .font(.system(size: 10, design: .rounded))
                             .foregroundColor(Aperture.label)
                     }
