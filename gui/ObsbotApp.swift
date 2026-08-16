@@ -179,6 +179,28 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private var audioChannel: AVCaptureAudioChannel?
     private var levelTimer: Timer?
 
+    // MARK: Keep-mic-live-during-calls (opt-in; independent of panel visibility)
+    // ponytail: the OBSBOT Meet 2's mic only carries real audio while the video stream is open
+    // (confirmed live) — otherwise it reports as a healthy device but sends silence. This holds a
+    // dedicated, hidden, output-less video session open exactly while (a) the user opted in AND
+    // (b) some app is actually capturing the mic, so the camera light isn't on any more than needed.
+    // DELIBERATELY NOT gated by `visiblePanels`: the whole point is to keep working while the panel/
+    // popover is closed and the user is on a call elsewhere. Do not add a visiblePanels guard here.
+    @Published var keepMicLiveDuringCalls: Bool = UserDefaults.standard.bool(forKey: "keepMicLiveDuringCalls") {
+        didSet { UserDefaults.standard.set(keepMicLiveDuringCalls, forKey: "keepMicLiveDuringCalls") }
+    }
+    private let keepAliveSession = AVCaptureSession()
+    private var keepAliveConfigured = false
+    private var keepAliveRunning = false
+    private var micRunningSomewhereListenerInstalled = false
+    // CoreAudio matches AudioObjectRemovePropertyListenerBlock to Add by exact block reference,
+    // so the actual registered block (and the device ID it was registered against) must be kept
+    // around for removal — a freshly-allocated closure at remove time is a silent no-op and leaks
+    // the listener.
+    private var micListenerBlock: AudioObjectPropertyListenerBlock?
+    private var micListenerDeviceID: AudioObjectID = 0
+    private let micListenerQueue = DispatchQueue.global(qos: .utility)
+
     private var controller: VVUVCController?
 
     // MARK: Preview (one AVCaptureSession owned by the model, shared by popover and pinned window)
@@ -187,7 +209,16 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private var sessionConfigured = false
     private var loggedFirstFrame = false
     private var frameTimeoutWork: DispatchWorkItem?
-    private let videoQueue = DispatchQueue(label: "obsbot.preview")
+    private let videoQueue = DispatchQueue(label: "obsbot.preview") // sample-buffer delegate callbacks ONLY
+    // ponytail: all AVCaptureSession mutation (beginConfiguration/addInput/addOutput/
+    // commitConfiguration/startRunning/stopRunning) for ALL THREE sessions (preview, mic-meter,
+    // keep-alive) goes through this single serial queue. Previously configuration ran on main
+    // while startRunning/stopRunning ran on videoQueue, so AVFoundation could enumerate a
+    // session's connections on one thread while another thread mutated it — that's the
+    // "mutated a collection while enumerating" NSFastEnumerationMutation abort that crashed the
+    // app. One shared serial queue for lifecycle, kept separate from videoQueue (which only
+    // receives frames), removes the race without introducing new ones between the three sessions.
+    private let sessionQueue = DispatchQueue(label: "obsbot.sessionLifecycle")
 
     // MARK: Pin (floating detached window)
     @Published var pinned = false
@@ -285,31 +316,34 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
     private func startPreviewAuthorized() {
         guard visiblePanels > 0 else { return } // panel may have closed while permission prompt was up
-        if !sessionConfigured {
-            guard let device = findCaptureDevice() else {
-                previewState = .unavailable
-                return
-            }
-            session.beginConfiguration()
-            session.sessionPreset = .high
-            do {
-                let input = try AVCaptureDeviceInput(device: device)
-                guard session.canAddInput(input) else { throw NSError(domain: "obsbot", code: 1) }
-                session.addInput(input)
-            } catch {
-                session.commitConfiguration()
-                previewState = .inUse // couldn't attach the input: someone else holds the device
-                return
-            }
-            let output = AVCaptureVideoDataOutput()
-            output.setSampleBufferDelegate(self, queue: videoQueue)
-            if session.canAddOutput(output) { session.addOutput(output) }
-            session.commitConfiguration()
-            sessionConfigured = true
-        }
         previewState = .starting
         loggedFirstFrame = false
-        videoQueue.async { self.session.startRunning() }
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.sessionConfigured {
+                guard let device = self.findCaptureDevice() else {
+                    DispatchQueue.main.async { self.previewState = .unavailable }
+                    return
+                }
+                self.session.beginConfiguration()
+                self.session.sessionPreset = .high
+                do {
+                    let input = try AVCaptureDeviceInput(device: device)
+                    guard self.session.canAddInput(input) else { throw NSError(domain: "obsbot", code: 1) }
+                    self.session.addInput(input)
+                } catch {
+                    self.session.commitConfiguration()
+                    DispatchQueue.main.async { self.previewState = .inUse } // couldn't attach: someone else holds the device
+                    return
+                }
+                let output = AVCaptureVideoDataOutput()
+                output.setSampleBufferDelegate(self, queue: self.videoQueue)
+                if self.session.canAddOutput(output) { self.session.addOutput(output) }
+                self.session.commitConfiguration()
+                self.sessionConfigured = true
+            }
+            self.session.startRunning()
+        }
 
         // No frames within 2.5s -> treat as "in use by another app".
         frameTimeoutWork?.cancel()
@@ -323,7 +357,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
     func stopPreview() {
         frameTimeoutWork?.cancel()
-        videoQueue.async { self.session.stopRunning() }
+        sessionQueue.async { self.session.stopRunning() }
         previewState = .idle
     }
 
@@ -359,24 +393,27 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
     private func startMicLevelMeterAuthorized() {
         guard visiblePanels > 0 else { return } // panel may have closed while permission prompt was up
-        if !audioSessionConfigured {
-            guard let device = findAudioCaptureDevice() else { return }
-            audioSession.beginConfiguration()
-            do {
-                let input = try AVCaptureDeviceInput(device: device)
-                guard audioSession.canAddInput(input) else { throw NSError(domain: "obsbot", code: 2) }
-                audioSession.addInput(input)
-            } catch {
-                audioSession.commitConfiguration()
-                return
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.audioSessionConfigured {
+                guard let device = self.findAudioCaptureDevice() else { return }
+                self.audioSession.beginConfiguration()
+                do {
+                    let input = try AVCaptureDeviceInput(device: device)
+                    guard self.audioSession.canAddInput(input) else { throw NSError(domain: "obsbot", code: 2) }
+                    self.audioSession.addInput(input)
+                } catch {
+                    self.audioSession.commitConfiguration()
+                    return
+                }
+                let output = AVCaptureAudioDataOutput()
+                if self.audioSession.canAddOutput(output) { self.audioSession.addOutput(output) }
+                self.audioSession.commitConfiguration()
+                self.audioChannel = output.connection(with: .audio)?.audioChannels.first
+                self.audioSessionConfigured = true
             }
-            let output = AVCaptureAudioDataOutput()
-            if audioSession.canAddOutput(output) { audioSession.addOutput(output) }
-            audioSession.commitConfiguration()
-            audioChannel = output.connection(with: .audio)?.audioChannels.first
-            audioSessionConfigured = true
+            self.audioSession.startRunning()
         }
-        videoQueue.async { self.audioSession.startRunning() }
 
         levelTimer?.invalidate()
         let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
@@ -391,7 +428,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         levelTimer?.invalidate()
         levelTimer = nil
         if audioSessionConfigured {
-            videoQueue.async { self.audioSession.stopRunning() }
+            sessionQueue.async { self.audioSession.stopRunning() }
         }
         micLevel = 0
     }
@@ -418,8 +455,168 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 self.loggedFirstFrame = true
                 FileHandle.standardError.write("preview: first frame received\n".data(using: .utf8)!)
             }
+            if output === self.keepAliveOutput, !self.loggedKeepAliveFrame {
+                self.loggedKeepAliveFrame = true
+                FileHandle.standardError.write("keepalive: session running / frame received\n".data(using: .utf8)!)
+            }
         }
     }
+
+    // MARK: Keep-mic-live-during-calls
+
+    // Called when the toggle flips (UserDefaults-persisted @Published property above; call this
+    // from the setter site in the view / an explicit setter since didSet already persists it).
+    func setKeepMicLiveDuringCalls(_ on: Bool) {
+        keepMicLiveDuringCalls = on
+        if on {
+            installMicRunningSomewhereListener()
+        } else {
+            removeMicRunningSomewhereListener()
+            stopKeepAliveSession()
+        }
+    }
+
+    private func installMicRunningSomewhereListener() {
+        guard !micRunningSomewhereListenerInstalled, audioDeviceID != 0 else {
+            if audioDeviceID == 0 {
+                FileHandle.standardError.write("keepalive: no OBSBOT audio device, toggle has nothing to listen to\n".data(using: .utf8)!)
+            }
+            return
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                                  mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.handleMicRunningSomewhereChanged() }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(audioDeviceID, &address, micListenerQueue, block)
+        guard status == noErr else {
+            FileHandle.standardError.write("keepalive: failed to install IsRunningSomewhere listener, status=\(status)\n".data(using: .utf8)!)
+            return
+        }
+        micListenerBlock = block
+        micListenerDeviceID = audioDeviceID
+        micRunningSomewhereListenerInstalled = true
+        FileHandle.standardError.write("keepalive: listener installed\n".data(using: .utf8)!)
+        // Poll once now in case the mic is already in use when the toggle turns on.
+        handleMicRunningSomewhereChanged()
+    }
+
+    private func removeMicRunningSomewhereListener() {
+        guard micRunningSomewhereListenerInstalled, let block = micListenerBlock, micListenerDeviceID != 0 else { return }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                                  mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+        // Must pass the SAME block reference (and the device ID it was registered against, which
+        // may differ from the current audioDeviceID if the device was replugged since) that was
+        // given to AudioObjectAddPropertyListenerBlock — CoreAudio matches by block identity, so a
+        // freshly-allocated closure here would silently fail to remove anything.
+        AudioObjectRemovePropertyListenerBlock(micListenerDeviceID, &address, micListenerQueue, block)
+        micListenerBlock = nil
+        micListenerDeviceID = 0
+        micRunningSomewhereListenerInstalled = false
+        FileHandle.standardError.write("keepalive: listener removed\n".data(using: .utf8)!)
+    }
+
+    private func handleMicRunningSomewhereChanged() {
+        guard audioDeviceID != 0 else { return }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                                  mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioObjectGetPropertyData(audioDeviceID, &address, 0, nil, &size, &value)
+        let running = value == 1
+        FileHandle.standardError.write("keepalive: IsRunningSomewhere=\(running)\n".data(using: .utf8)!)
+        if running {
+            startKeepAliveSession()
+        } else {
+            stopKeepAliveSession()
+        }
+    }
+
+    private var keepAliveOutput: AVCaptureVideoDataOutput?
+    private var loggedKeepAliveFrame = false
+
+    private func startKeepAliveSession() {
+        guard keepMicLiveDuringCalls, !keepAliveRunning else { return }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            startKeepAliveSessionAuthorized()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self.startKeepAliveSessionAuthorized()
+                    } else {
+                        // Can't run without permission: don't silently wedge the toggle in an "on
+                        // but broken" state — flip it back off so the UI reflects reality.
+                        self.setKeepMicLiveDuringCalls(false)
+                        FileHandle.standardError.write("keepalive: camera permission denied, toggle reset off\n".data(using: .utf8)!)
+                    }
+                }
+            }
+        default:
+            setKeepMicLiveDuringCalls(false)
+            FileHandle.standardError.write("keepalive: camera permission unavailable, toggle reset off\n".data(using: .utf8)!)
+        }
+    }
+
+    private func startKeepAliveSessionAuthorized() {
+        guard keepMicLiveDuringCalls, !keepAliveRunning else { return }
+        loggedKeepAliveFrame = false
+        keepAliveRunning = true
+        FileHandle.standardError.write("keepalive: session starting\n".data(using: .utf8)!)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.keepAliveConfigured {
+                guard let device = self.findCaptureDevice() else {
+                    FileHandle.standardError.write("keepalive: no OBSBOT video device found\n".data(using: .utf8)!)
+                    DispatchQueue.main.async { self.keepAliveRunning = false }
+                    return
+                }
+                self.keepAliveSession.beginConfiguration()
+                do {
+                    let input = try AVCaptureDeviceInput(device: device)
+                    // Multiple AVCaptureSessions can generally read one camera concurrently (this one
+                    // deliberately overlaps with the preview session when both are active); if adding
+                    // the input fails anyway, fail gracefully instead of crashing or wedging the toggle.
+                    guard self.keepAliveSession.canAddInput(input) else { throw NSError(domain: "obsbot", code: 3) }
+                    self.keepAliveSession.addInput(input)
+                } catch {
+                    self.keepAliveSession.commitConfiguration()
+                    FileHandle.standardError.write("keepalive: could not attach video input (\(error)); leaving mic possibly silent, toggle stays on and will retry on the next IsRunningSomewhere change\n".data(using: .utf8)!)
+                    DispatchQueue.main.async { self.keepAliveRunning = false }
+                    return
+                }
+                // Throwaway output, no preview layer, no window: this session exists purely to keep
+                // the camera's video pipeline open so the mic carries real audio.
+                let output = AVCaptureVideoDataOutput()
+                output.setSampleBufferDelegate(self, queue: self.videoQueue)
+                if self.keepAliveSession.canAddOutput(output) { self.keepAliveSession.addOutput(output) }
+                self.keepAliveSession.commitConfiguration()
+                self.keepAliveOutput = output
+                self.keepAliveConfigured = true
+            }
+            self.keepAliveSession.startRunning()
+        }
+    }
+
+    private func stopKeepAliveSession() {
+        guard keepAliveRunning else { return }
+        keepAliveRunning = false
+        sessionQueue.async { self.keepAliveSession.stopRunning() }
+        FileHandle.standardError.write("keepalive: session stopped\n".data(using: .utf8)!)
+    }
+
+    #if DEBUG
+    // Headless-verification-only entry point: manually exercises the keep-alive session's start
+    // path (input attach + startRunning + first-frame log) without needing IsRunningSomewhere to
+    // actually flip true, since no other app is capturing the mic in a headless test run.
+    func startKeepAliveSessionForTest() {
+        startKeepAliveSession()
+    }
+    #endif
 
     // MARK: Pinned floating window
 
@@ -524,6 +721,16 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         micVolume = Double(audioGetVolume(id) * 100)
         micMuted = audioHasProperty(id, kAudioDevicePropertyMute) ? audioGetMute(id) : false
         FileHandle.standardError.write("mic: found OBSBOT audio device, volume=\(Int(micVolume.rounded()))% muted=\(micMuted)\n".data(using: .utf8)!)
+
+        // The audio device ID is ephemeral (re-plugs get a new one), so re-arm the keep-alive
+        // listener against the fresh ID whenever the toggle is already on. Remove the OLD
+        // listener first (using its stored block + device ID, which removeMicRunningSomewhereListener
+        // already tracks) before installing against the new ID, so listeners don't accumulate
+        // across replugs.
+        if keepMicLiveDuringCalls {
+            removeMicRunningSomewhereListener()
+            installMicRunningSomewhereListener()
+        }
     }
 
     func setMicVolume(_ v: Double) {
@@ -595,6 +802,30 @@ extension Color {
                   red: Double((hex >> 16) & 0xff) / 255,
                   green: Double((hex >> 8) & 0xff) / 255,
                   blue: Double(hex & 0xff) / 255)
+    }
+}
+
+// MARK: - Custom toggle (pill track, cream knob; amber when on to match the slider knob styling)
+
+struct ApertureToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            Capsule()
+                .fill(configuration.isOn ? Aperture.accent.opacity(0.85) : Color.black.opacity(0.35))
+                .frame(width: 34, height: 19)
+                .overlay(
+                    Circle()
+                        .fill(Aperture.knob)
+                        .frame(width: 15, height: 15)
+                        .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
+                        .offset(x: configuration.isOn ? 7.5 : -7.5)
+                )
+                .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { configuration.isOn.toggle() }
     }
 }
 
@@ -896,6 +1127,25 @@ struct PanelView: View {
                     // level while muted (dimmed) rather than forcing it to 0 — that's more useful for
                     // confirming the mic still hears you before you unmute.
                     MicLevelMeter(level: model.micLevel, dimmed: model.micMuted)
+
+                    Rectangle().fill(Aperture.hairline).frame(height: 1)
+                        .padding(.top, 2)
+
+                    Toggle(isOn: Binding(
+                        get: { model.keepMicLiveDuringCalls },
+                        set: { model.setKeepMicLiveDuringCalls($0) }
+                    )) {
+                        Text("Keep mic live during calls")
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundColor(Aperture.text)
+                    }
+                    .toggleStyle(ApertureToggleStyle())
+
+                    if model.keepMicLiveDuringCalls {
+                        Text("Camera light stays on while an app uses the mic.")
+                            .font(.system(size: 10, design: .rounded))
+                            .foregroundColor(Aperture.label)
+                    }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
@@ -963,7 +1213,9 @@ struct ObsbotApp: App {
         NSApplication.shared.setActivationPolicy(.accessory)
         let m = CameraModel()
         _model = StateObject(wrappedValue: m)
-        // ponytail: headless verification hooks; harmless in normal use.
+        // ponytail: headless verification hooks; harmless in normal use, but gated out of
+        // release builds entirely via #if DEBUG so this test scaffolding never ships.
+        #if DEBUG
         let env = ProcessInfo.processInfo.environment
         if env["OBSBOT_PREVIEW_TEST"] == "1" {
             DispatchQueue.main.async { m.startPreview() }
@@ -985,6 +1237,35 @@ struct ObsbotApp: App {
                 }
             }
         }
+        if env["OBSBOT_KEEPALIVE_TEST"] == "1" {
+            // Headless verification: force the toggle on to prove the CoreAudio listener installs
+            // and reads the initial IsRunningSomewhere value, then manually exercise the keep-alive
+            // session's start path directly (since no other app is capturing the mic in this test
+            // environment, IsRunningSomewhere will likely stay false the whole time — that's
+            // expected and doesn't indicate a bug), then flip the toggle off to prove listener
+            // removal + session stop.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                m.setKeepMicLiveDuringCalls(true)
+                m.startKeepAliveSessionForTest()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                m.setKeepMicLiveDuringCalls(false)
+            }
+        }
+        if env["OBSBOT_KEEPALIVE_RAPID_TEST"] == "1" {
+            // Headless verification: toggle keep-alive on/off/on/off in quick succession (each
+            // start/stop dispatched to sessionQueue but requested from main in a tight burst) to
+            // shake out any remaining ordering race between rapid session mutations.
+            for i in 0..<4 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + Double(i) * 0.3) {
+                    let on = i % 2 == 0
+                    FileHandle.standardError.write("keepalive-rapid: toggling \(on)\n".data(using: .utf8)!)
+                    m.setKeepMicLiveDuringCalls(on)
+                    if on { m.startKeepAliveSessionForTest() }
+                }
+            }
+        }
+        #endif
     }
 
     var body: some Scene {
