@@ -11,7 +11,8 @@ settings are reachable without the vendor's software.
 ## Status
 
 - `obsbot` CLI: works. Controls zoom, all image settings, and mic volume/mute.
-- Menubar GUI: planned.
+- OBSBOT Control (menu-bar GUI): works. Same controls, plus a live camera
+  preview, a mic level meter, and a "Launch at login" toggle.
 
 ## Controls
 
@@ -42,7 +43,7 @@ The OBSBOT app's AI noise-reduction and pickup-pattern (directionality) modes
 are proprietary vendor features, not standard CoreAudio controls, so they are
 not supported here by design.
 
-## Build
+## Build (CLI)
 
 Requires the Xcode command-line tools (`clang`). The two frameworks are
 vendored in `vendor/`, so no download is needed.
@@ -72,13 +73,45 @@ vendored in `vendor/`, so no download is needed.
 2. Open a `VVUVCController` for that device.
 3. Read or write the UVC controls directly.
 
-No network access. Nothing leaves the machine.
+No network access. Nothing leaves the machine. This applies to both the CLI
+and the GUI: neither talks to a server, neither needs an OBSBOT account.
+
+## OBSBOT Control (GUI)
+
+A SwiftUI/AppKit menu-bar app ("OBSBOT Control") wrapping the same UVC/CoreAudio
+calls as the CLI. It runs as a background agent, not a Dock app (`LSUIElement`):
+click the menu-bar icon to open the panel.
+
+Features:
+
+- Live camera preview.
+- Zoom, exposure, white balance, and brightness sliders.
+- Mic volume, mute, and a live input level meter.
+- "Keep mic live during calls" toggle: the OBSBOT mic only passes audio while
+  a video stream is open, so some call apps briefly silence it; this toggle
+  works around that by holding a camera stream open in the background.
+- "Launch at login" toggle (uses macOS's `SMAppService`).
+- Custom app icon ("Aperture Bloom", a brass camera-aperture motif).
+
+Build:
+
+```sh
+cd gui && ./build.sh
+```
+
+This produces `OBSBOT Control.app` in `gui/`. Run `./build.sh --install` to
+also copy it to `~/Applications`, so Spotlight and Raycast can find it. The
+icon is generated from `design/appicon.svg` via `design/make-icon.sh` (needs
+`cairosvg`) into `design/AppIcon.icns`, but the `.icns` is committed, so a
+normal build doesn't need a rasterizer.
 
 ## Layout
 
 ```
 main.m          the CLI
-build.sh        one-line clang build
+build.sh        one-line clang build for the CLI
+gui/            OBSBOT Control.app: SwiftUI/AppKit menu-bar GUI + its build.sh
+design/         app icon source (appicon.svg), make-icon.sh, built AppIcon.icns
 vendor/         VVUVCKit.framework + USBBusProber.framework (open source)
 ```
 
