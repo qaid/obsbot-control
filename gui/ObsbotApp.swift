@@ -284,6 +284,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     }
 
     private func startPreviewAuthorized() {
+        guard visiblePanels > 0 else { return } // panel may have closed while permission prompt was up
         if !sessionConfigured {
             guard let device = findCaptureDevice() else {
                 previewState = .unavailable
