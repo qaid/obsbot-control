@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- ground gradient for the squircle plate -->
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#23201b"/>
+      <stop offset="100%" stop-color="#191612"/>
+    </linearGradient>
+
+    <!-- subtle radial inner glow, centered -->
+    <radialGradient id="innerGlow" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#b9762e" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#b9762e" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- top inner highlight -->
+    <linearGradient id="topHighlight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f6ecdb" stop-opacity="0.08"/>
+      <stop offset="12%" stop-color="#f6ecdb" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- per-blade metal gradients: each runs along that blade's own outer->inner axis
+         (computed from the rotated geometry), warmer/richer amber bias: shadow side
+         stays #b9762e, lit side pushes through #d99a4e into #e6b569 near the pinhole. -->
+    <linearGradient id="bladeGrad0" gradientUnits="userSpaceOnUse" x1="0.00" y1="-395.00" x2="18.30" y2="-41.11">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="50%" stop-color="#d99a4e"/>
+      <stop offset="100%" stop-color="#e6b569"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad1" gradientUnits="userSpaceOnUse" x1="342.08" y1="-197.50" x2="44.75" y2="-4.70">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="50%" stop-color="#d99a4e"/>
+      <stop offset="100%" stop-color="#e6b569"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad2" gradientUnits="userSpaceOnUse" x1="342.08" y1="197.50" x2="26.45" y2="36.41">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="55%" stop-color="#c8863c"/>
+      <stop offset="100%" stop-color="#d99a4e"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad3" gradientUnits="userSpaceOnUse" x1="0.00" y1="395.00" x2="-18.30" y2="41.11">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="60%" stop-color="#c8863c"/>
+      <stop offset="100%" stop-color="#d99a4e"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad4" gradientUnits="userSpaceOnUse" x1="-342.08" y1="197.50" x2="-44.75" y2="4.70">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="55%" stop-color="#c8863c"/>
+      <stop offset="100%" stop-color="#d99a4e"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad5" gradientUnits="userSpaceOnUse" x1="-342.08" y1="-197.50" x2="-26.45" y2="-36.41">
+      <stop offset="0%" stop-color="#b9762e"/>
+      <stop offset="48%" stop-color="#d99a4e"/>
+      <stop offset="100%" stop-color="#e6b569"/>
+    </linearGradient>
+
+    <!-- pinhole glow -->
+    <radialGradient id="pinholeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f6ecdb" stop-opacity="0.9"/>
+      <stop offset="45%" stop-color="#e6b569" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#e6b569" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- wider warm glow that spills onto the innermost blade tips around the pinhole -->
+    <radialGradient id="pinholeSpill" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e6b569" stop-opacity="0.35"/>
+      <stop offset="60%" stop-color="#e6b569" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#e6b569" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- drop shadow for the whole plate -->
+    <filter id="plateShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+
+    <filter id="softBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+
+    <filter id="softBlurWide" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+
+    <!-- six blades, geometrically derived: one leading-edge cubic (outer r=395 -> pinhole r=45,
+         curling 24deg), the trailing edge is that exact curve rotated 55deg (60deg spacing minus
+         a 3.5deg seam), closed by arcs on the outer and pinhole circles. Rotated every 60deg. -->
+    <path id="bladeShape" d="M 0.00,-395.00 C 42.53,-241.18 29.09,-164.96 18.30,-41.11 A 45,45 0 0 1 44.38,-7.43 C 153.61,-66.79 224.59,-97.65 329.38,-218.02 A 395,395 0 0 0 0.00,-395.00 Z"/>
+    <path id="bladeEdge" d="M 0.00,-395.00 C 42.53,-241.18 29.09,-164.96 18.30,-41.11" fill="none" stroke="#e6b569" stroke-linecap="round"/>
+
+    <clipPath id="apertureClip">
+      <circle r="420"/>
+    </clipPath>
+  </defs>
+
+  <!-- ============ PLATE (squircle, ~83% of canvas, centered) ============ -->
+  <!-- superellipse approximated with a very-rounded rect; W=1024, plate ~850px, centered -->
+  <g filter="url(#plateShadow)">
+    <rect x="87" y="87" width="850" height="850" rx="230" ry="230" fill="url(#ground)"/>
+  </g>
+  <rect x="87" y="87" width="850" height="850" rx="230" ry="230" fill="url(#innerGlow)"/>
+  <rect x="87" y="87" width="850" height="850" rx="230" ry="230" fill="url(#topHighlight)"/>
+
+  <!-- ============ APERTURE GROUP (centered at 512,512) ============ -->
+  <g transform="translate(512,512)">
+
+    <!-- turned bezel: dark base ring + top-left highlight arc + bottom-right shadow arc,
+         so it reads as a machined rim rather than a flat brown stroke -->
+    <circle r="420" fill="none" stroke="#3a332a" stroke-width="15"/>
+    <circle r="420" fill="none" stroke="#191612" stroke-width="3" stroke-dasharray="659 659" stroke-dashoffset="-165" opacity="0.8"/>
+    <circle r="420" fill="none" stroke="#e6b569" stroke-width="2.4" stroke-dasharray="659 659" stroke-dashoffset="495" opacity="0.55"/>
+    <circle r="413" fill="none" stroke="#191612" stroke-width="2" opacity="0.5"/>
+
+    <!-- six blades, each with its own outer->inner metal gradient and leading-edge highlight -->
+    <g id="blades">
+      <use href="#bladeShape" transform="rotate(0)" fill="url(#bladeGrad0)"/>
+      <use href="#bladeShape" transform="rotate(60)" fill="url(#bladeGrad1)"/>
+      <use href="#bladeShape" transform="rotate(120)" fill="url(#bladeGrad2)"/>
+      <use href="#bladeShape" transform="rotate(180)" fill="url(#bladeGrad3)"/>
+      <use href="#bladeShape" transform="rotate(240)" fill="url(#bladeGrad4)"/>
+      <use href="#bladeShape" transform="rotate(300)" fill="url(#bladeGrad5)"/>
+
+      <use href="#bladeEdge" transform="rotate(0)" stroke-width="3" opacity="0.95"/>
+      <use href="#bladeEdge" transform="rotate(60)" stroke-width="2.6" opacity="0.85"/>
+      <use href="#bladeEdge" transform="rotate(120)" stroke-width="1.8" opacity="0.45"/>
+      <use href="#bladeEdge" transform="rotate(180)" stroke-width="1.6" opacity="0.4"/>
+      <use href="#bladeEdge" transform="rotate(240)" stroke-width="1.8" opacity="0.5"/>
+      <use href="#bladeEdge" transform="rotate(300)" stroke-width="2.8" opacity="0.9"/>
+    </g>
+
+    <!-- subtle global top-left light, kept low so it adds sheen without flattening per-blade shading -->
+    <g clip-path="url(#apertureClip)">
+      <radialGradient id="lightSource" cx="-140" cy="-140" r="420" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#f6ecdb" stop-opacity="0.08"/>
+        <stop offset="55%" stop-color="#f6ecdb" stop-opacity="0.02"/>
+        <stop offset="100%" stop-color="#f6ecdb" stop-opacity="0"/>
+      </radialGradient>
+      <circle r="420" fill="url(#lightSource)"/>
+    </g>
+
+    <!-- warm spill onto innermost blade tips, then pinhole glow, then bright center dot -->
+    <circle r="150" fill="url(#pinholeSpill)" filter="url(#softBlurWide)"/>
+    <circle r="82" fill="url(#pinholeGlow)" filter="url(#softBlur)"/>
+    <circle r="41" fill="#f6ecdb"/>
+  </g>
+</svg>

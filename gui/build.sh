@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 
 APP="OBSBOT Control.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
+
+cp ../design/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Self-contained bundle: copy the vendored frameworks in and point rpath at them.
 cp -R ../vendor/VVUVCKit.framework ../vendor/USBBusProber.framework "$APP/Contents/Frameworks/"
@@ -32,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleName</key><string>OBSBOT Control</string>
     <key>CFBundleExecutable</key><string>OBSBOT Control</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
@@ -47,3 +50,12 @@ EOF
 codesign --force --deep -s - "$APP" 2>/dev/null || true
 
 echo "Built: $(pwd)/$APP"
+
+# Optional: ./build.sh --install copies the built app to ~/Applications for Spotlight/Raycast.
+if [ "$1" = "--install" ]; then
+  mkdir -p "$HOME/Applications"
+  rm -rf "$HOME/Applications/$APP"
+  cp -R "$APP" "$HOME/Applications/$APP"
+  codesign --force --deep -s - "$HOME/Applications/$APP" 2>/dev/null || true
+  echo "Installed: $HOME/Applications/$APP"
+fi

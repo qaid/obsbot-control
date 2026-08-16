@@ -12,6 +12,7 @@ import AVFoundation
 import IOKit
 import IOKit.usb
 import CoreAudio
+import ServiceManagement
 
 // MARK: - Device discovery (duplicated tiny IOKit lookup from main.m, translated to Swift)
 
@@ -189,6 +190,12 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var keepMicLiveDuringCalls: Bool = UserDefaults.standard.bool(forKey: "keepMicLiveDuringCalls") {
         didSet { UserDefaults.standard.set(keepMicLiveDuringCalls, forKey: "keepMicLiveDuringCalls") }
     }
+
+    // MARK: Launch at login (SMAppService; source of truth is SMAppService.mainApp.status, NOT
+    // UserDefaults — it must stay correct across reboots and reflect changes made in System
+    // Settings > General > Login Items, neither of which a persisted bool would track.)
+    private static var isLoginItemEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    @Published var launchAtLogin: Bool = CameraModel.isLoginItemEnabled
     private let keepAliveSession = AVCaptureSession()
     private var keepAliveConfigured = false
     private var keepAliveRunning = false
@@ -473,6 +480,27 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         } else {
             removeMicRunningSomewhereListener()
             stopKeepAliveSession()
+        }
+    }
+
+    // Re-reads the real status from SMAppService so the toggle reflects reality even if the
+    // user changed it in System Settings > General > Login Items since we last checked.
+    func refreshLaunchAtLogin() {
+        launchAtLogin = CameraModel.isLoginItemEnabled
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        launchAtLogin = on
+        do {
+            if on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            FileHandle.standardError.write("launchAtLogin: failed to \(on ? "register" : "unregister") (\(error)); reverting toggle to actual status\n".data(using: .utf8)!)
+            // Don't leave the UI showing a state that didn't actually take effect.
+            launchAtLogin = CameraModel.isLoginItemEnabled
         }
     }
 
@@ -1003,6 +1031,7 @@ struct PanelView: View {
         )
         .onAppear {
             model.refresh()
+            model.refreshLaunchAtLogin()
             if countsAppearance { model.panelAppeared() }
         }
         .onDisappear {
@@ -1150,6 +1179,20 @@ struct PanelView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
             }
+
+            Rectangle().fill(Aperture.hairline).frame(height: 1)
+
+            Toggle(isOn: Binding(
+                get: { model.launchAtLogin },
+                set: { model.setLaunchAtLogin($0) }
+            )) {
+                Text("Launch at login")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundColor(Aperture.text)
+            }
+            .toggleStyle(ApertureToggleStyle())
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
 
             Rectangle().fill(Aperture.hairline).frame(height: 1)
 
