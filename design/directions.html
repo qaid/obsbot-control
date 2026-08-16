@@ -1,0 +1,322 @@
+<title>Menubar Directions</title>
+<style>
+  :root {
+    --ground: #16181c;
+    --panel: #1e2127;
+    --ink: #f5f3ee;
+    --ink-dim: #a7abb4;
+    --ink-faint: #6b7079;
+    --line: #2c3038;
+    --accent: #5b8db8;
+    --radius: 14px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  :root:not([data-theme="dark"]) {
+    --ground: #eceae4;
+    --panel: #ffffff;
+    --ink: #1a1d22;
+    --ink-dim: #565b64;
+    --ink-faint: #8a8f98;
+    --line: #dcd9d1;
+    --accent: #3f6f97;
+  }
+  :root[data-theme="dark"] {
+    --ground: #16181c;
+    --panel: #1e2127;
+    --ink: #f5f3ee;
+    --ink-dim: #a7abb4;
+    --ink-faint: #6b7079;
+    --line: #2c3038;
+    --accent: #5b8db8;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground: #eceae4;
+      --panel: #ffffff;
+      --ink: #1a1d22;
+      --ink-dim: #565b64;
+      --ink-faint: #8a8f98;
+      --line: #dcd9d1;
+      --accent: #3f6f97;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 72px 32px 96px; }
+
+  /* ---- header ---- */
+  header { border-bottom: 1px solid var(--line); padding-bottom: 40px; margin-bottom: 56px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(34px, 5vw, 52px); line-height: 1.04; margin: 0 0 20px;
+    letter-spacing: -0.02em; text-wrap: balance; font-weight: 640;
+  }
+  .lede { max-width: 60ch; color: var(--ink-dim); font-size: 17px; margin: 0; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  /* ---- direction row ---- */
+  .dir {
+    display: grid; grid-template-columns: 340px 1fr; gap: 44px;
+    align-items: start; padding: 48px 0; border-bottom: 1px solid var(--line);
+  }
+  .dir:last-child { border-bottom: none; }
+  .mockup-col { display: flex; justify-content: center; }
+  .meta { padding-top: 6px; }
+  .num {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-faint);
+    letter-spacing: 0.1em; margin: 0 0 10px;
+  }
+  .meta h2 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; font-weight: 640; }
+  .register {
+    font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--accent); margin: 0 0 16px;
+  }
+  .meta p { color: var(--ink-dim); margin: 0 0 20px; max-width: 46ch; font-size: 15px; }
+  .specs { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; }
+  .swatches { display: flex; gap: 7px; }
+  .sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(128,128,128,.28); }
+  .typespec { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .typespec b { color: var(--ink-dim); font-weight: 500; }
+
+  /* ==== shared popover chrome ==== */
+  .pop {
+    width: 300px; border-radius: 16px; overflow: hidden;
+    box-shadow: 0 22px 60px -20px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.3);
+  }
+  .pop .top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 12px;
+  }
+  .pop .dev { display: flex; align-items: center; gap: 8px; }
+  .pop .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .pop .name { font-size: 13px; font-weight: 600; }
+  .pop .status { font-size: 11px; }
+  .row { padding: 9px 16px; }
+  .row .lab { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 7px; }
+  .row .val { font-variant-numeric: tabular-nums; }
+  .track { height: 4px; border-radius: 3px; position: relative; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .knob {
+    position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .foot { display: flex; gap: 8px; padding: 12px 16px 15px; }
+  .btn { flex: 1; text-align: center; font-size: 12px; padding: 7px; border-radius: 8px; }
+
+  /* ===== D1 Graphite Console ===== */
+  .d1 { background: #14161a; font-family: var(--mono); color: #d6dae0; }
+  .d1 .top { border-bottom: 1px solid #23272e; }
+  .d1 .dot { background: #4ea3c9; box-shadow: 0 0 8px #4ea3c9; }
+  .d1 .name { letter-spacing: 0.04em; }
+  .d1 .status { color: #4ea3c9; letter-spacing: 0.1em; text-transform: uppercase; }
+  .d1 .lab { color: #7f868f; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; }
+  .d1 .val { color: #eef1f4; }
+  .d1 .track { background: #23272e; height: 3px; border-radius: 0; }
+  .d1 .fill { background: #4ea3c9; border-radius: 0; }
+  .d1 .knob { background: #eef1f4; border-radius: 1px; width: 3px; height: 12px; }
+  .d1 .btn { background: #1f2329; color: #aab0b8; border: 1px solid #2c313a; letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; }
+  .d1 .btn.pri { background: #4ea3c9; color: #0d1013; border-color: #4ea3c9; }
+
+  /* ===== D2 Aperture ===== */
+  .d2 { background: linear-gradient(160deg, #23201b, #191612); font-family: var(--sans); color: #ece3d4; }
+  .d2 .top { border-bottom: 1px solid #3a3226; }
+  .d2 .dot { background: #d99a4e; }
+  .d2 .name { font-weight: 600; }
+  .d2 .status { color: #d99a4e; }
+  .d2 .lab { color: #b3a488; }
+  .d2 .val { color: #f4ead8; font-weight: 600; }
+  .d2 .track { background: #3a3226; }
+  .d2 .fill { background: linear-gradient(90deg, #b9762e, #e6b569); }
+  .d2 .knob { background: #f6ecdb; border: 2px solid #d99a4e; }
+  .d2 .foot { padding-top: 14px; }
+  .d2 .btn { background: rgba(217,154,78,.12); color: #e6b569; border: 1px solid rgba(217,154,78,.35); }
+  .d2 .btn.pri { background: #d99a4e; color: #1c1610; border-color: #d99a4e; font-weight: 600; }
+
+  /* ===== D3 Clinical Light ===== */
+  .d3 { background: #f7f8fa; font-family: var(--sans); color: #1f2430; border: 1px solid #e4e7ec; }
+  .d3 .top { border-bottom: 1px solid #eceef2; }
+  .d3 .dot { background: #2e7d6b; }
+  .d3 .name { font-weight: 600; }
+  .d3 .status { color: #2e7d6b; }
+  .d3 .lab { color: #6a7180; }
+  .d3 .val { color: #1f2430; font-weight: 600; }
+  .d3 .track { background: #e4e7ec; }
+  .d3 .fill { background: #2e7d6b; }
+  .d3 .knob { background: #fff; border: 1px solid #cfd4dc; box-shadow: 0 1px 3px rgba(0,0,0,.14); }
+  .d3 .btn { background: #f0f2f5; color: #3a414d; }
+  .d3 .btn.pri { background: #2e7d6b; color: #fff; }
+
+  /* ===== D4 Terminal ===== */
+  .d4 { background: #0a0e0a; font-family: var(--mono); color: #7dd47d; border: 1px solid #163016; }
+  .d4 .top { border-bottom: 1px solid #163016; }
+  .d4 .dot { background: #4ade4a; box-shadow: 0 0 6px #4ade4a; }
+  .d4 .name { color: #b6f0b6; letter-spacing: 0.05em; }
+  .d4 .name::before { content: "$ "; color: #4a7a4a; }
+  .d4 .status { color: #4ade4a; }
+  .d4 .lab { color: #5aa35a; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px; }
+  .d4 .val { color: #b6f0b6; }
+  .d4 .track { background: #16301660; height: 12px; border-radius: 0; border: 1px solid #1c3d1c; }
+  .d4 .fill { background: repeating-linear-gradient(90deg, #4ade4a 0 6px, #0a0e0a 6px 8px); border-radius: 0; }
+  .d4 .knob { display: none; }
+  .d4 .btn { background: transparent; color: #7dd47d; border: 1px solid #2a5a2a; border-radius: 2px; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; }
+  .d4 .btn.pri { background: #1c3d1c; color: #b6f0b6; }
+
+  /* ===== D5 Soft ===== */
+  .d5 { background: #eef0f6; font-family: var(--sans); color: #3a3f52; }
+  .d5 .top { border-bottom: none; padding-bottom: 6px; }
+  .d5 .dot { background: #8b7fe0; }
+  .d5 .name { font-weight: 700; }
+  .d5 .status { color: #8b7fe0; font-weight: 600; }
+  .d5 .lab { color: #8288a0; }
+  .d5 .val { color: #3a3f52; font-weight: 700; }
+  .d5 .track { background: #dfe2ee; height: 8px; box-shadow: inset 2px 2px 4px #cfd3e2, inset -2px -2px 4px #fbfcff; }
+  .d5 .fill { background: linear-gradient(90deg, #9d92e8, #b3a9f0); }
+  .d5 .knob { background: #fff; width: 16px; height: 16px; box-shadow: 2px 2px 5px #c9cddd, -2px -2px 5px #ffffff; }
+  .d5 .foot { padding-top: 14px; }
+  .d5 .btn { background: #eef0f6; color: #6a6f85; box-shadow: 3px 3px 7px #d3d7e5, -3px -3px 7px #ffffff; border-radius: 11px; }
+  .d5 .btn.pri { background: linear-gradient(135deg, #9d92e8, #8b7fe0); color: #fff; box-shadow: 3px 3px 7px #c9cddd, -3px -3px 7px #ffffff; }
+
+  footer { margin-top: 64px; padding-top: 28px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 13px; font-family: var(--mono); }
+
+  @media (max-width: 760px) {
+    .dir { grid-template-columns: 1fr; gap: 28px; }
+    .mockup-col { justify-content: flex-start; }
+    .wrap { padding: 48px 20px 72px; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">obsbot-control / menubar</p>
+    <h1>Five ways the camera panel could feel</h1>
+    <p class="lede">One menubar app, five visual directions. Each mockup shows the <strong>same live panel</strong>: zoom, exposure, and white-balance sliders with a reset. Pick the register that fits how you want the tool to feel when it drops down from the menu bar, and I will build that one.</p>
+  </header>
+
+  <!-- D1 -->
+  <section class="dir">
+    <div class="mockup-col">
+      <div class="pop d1">
+        <div class="top"><div class="dev"><span class="dot"></span><span class="name">MEET 2</span></div><span class="status">Live</span></div>
+        <div class="row"><div class="lab"><span>Zoom</span><span class="val">40</span></div><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div></div>
+        <div class="row"><div class="lab"><span>Exposure</span><span class="val">330</span></div><div class="track"><div class="fill" style="width:13%"></div><div class="knob" style="left:13%"></div></div></div>
+        <div class="row"><div class="lab"><span>White Bal</span><span class="val">5100K</span></div><div class="track"><div class="fill" style="width:39%"></div><div class="knob" style="left:39%"></div></div></div>
+        <div class="foot"><span class="btn">Auto</span><span class="btn pri">Reset</span></div>
+      </div>
+    </div>
+    <div class="meta">
+      <p class="num">01</p>
+      <h2>Graphite Console</h2>
+      <p class="register">Pro video · precise</p>
+      <p>Reads like a broadcast tool sitting next to OBS or DaVinci. Monospaced labels, tabular values, thin square ticks. Nothing decorative; every pixel is a readout. For treating the camera as instrument, not gadget.</p>
+      <div class="specs">
+        <div class="swatches"><span class="sw" style="background:#14161a"></span><span class="sw" style="background:#4ea3c9"></span><span class="sw" style="background:#eef1f4"></span><span class="sw" style="background:#7f868f"></span></div>
+        <span class="typespec"><b>SF Mono</b> throughout</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- D2 -->
+  <section class="dir">
+    <div class="mockup-col">
+      <div class="pop d2">
+        <div class="top"><div class="dev"><span class="dot"></span><span class="name">Meet 2</span></div><span class="status">Framing</span></div>
+        <div class="row"><div class="lab"><span>Zoom</span><span class="val">40</span></div><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div></div>
+        <div class="row"><div class="lab"><span>Exposure</span><span class="val">330</span></div><div class="track"><div class="fill" style="width:13%"></div><div class="knob" style="left:13%"></div></div></div>
+        <div class="row"><div class="lab"><span>White balance</span><span class="val">5100K</span></div><div class="track"><div class="fill" style="width:39%"></div><div class="knob" style="left:39%"></div></div></div>
+        <div class="foot"><span class="btn">Auto</span><span class="btn pri">Reset</span></div>
+      </div>
+    </div>
+    <div class="meta">
+      <p class="num">02</p>
+      <h2>Aperture</h2>
+      <p class="register">Photographic · warm</p>
+      <p>Brass and amber on warm charcoal, the palette of a camera body and its focus ring. Sliders glow like an exposure meter. Feels like adjusting a physical lens, tactile and a little luxurious.</p>
+      <div class="specs">
+        <div class="swatches"><span class="sw" style="background:#191612"></span><span class="sw" style="background:#d99a4e"></span><span class="sw" style="background:#e6b569"></span><span class="sw" style="background:#ece3d4"></span></div>
+        <span class="typespec"><b>SF Pro</b> · semibold values</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- D3 -->
+  <section class="dir">
+    <div class="mockup-col">
+      <div class="pop d3">
+        <div class="top"><div class="dev"><span class="dot"></span><span class="name">Meet 2</span></div><span class="status">Connected</span></div>
+        <div class="row"><div class="lab"><span>Zoom</span><span class="val">40</span></div><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div></div>
+        <div class="row"><div class="lab"><span>Exposure</span><span class="val">330</span></div><div class="track"><div class="fill" style="width:13%"></div><div class="knob" style="left:13%"></div></div></div>
+        <div class="row"><div class="lab"><span>White balance</span><span class="val">5100K</span></div><div class="track"><div class="fill" style="width:39%"></div><div class="knob" style="left:39%"></div></div></div>
+        <div class="foot"><span class="btn">Auto</span><span class="btn pri">Reset</span></div>
+      </div>
+    </div>
+    <div class="meta">
+      <p class="num">03</p>
+      <h2>Clinical Light</h2>
+      <p class="register">System-native · calm</p>
+      <p>Bright, airy, at home beside macOS System Settings. Generous whitespace, one quiet green for state, hairline dividers. The direction that disappears into the OS and never fights for attention. The safe, tasteful default.</p>
+      <div class="specs">
+        <div class="swatches"><span class="sw" style="background:#f7f8fa"></span><span class="sw" style="background:#2e7d6b"></span><span class="sw" style="background:#1f2430"></span><span class="sw" style="background:#e4e7ec"></span></div>
+        <span class="typespec"><b>SF Pro</b> · light on white</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- D4 -->
+  <section class="dir">
+    <div class="mockup-col">
+      <div class="pop d4">
+        <div class="top"><div class="dev"><span class="dot"></span><span class="name">meet2</span></div><span class="status">[live]</span></div>
+        <div class="row"><div class="lab"><span>zoom</span><span class="val">40</span></div><div class="track"><div class="fill" style="width:40%"></div></div></div>
+        <div class="row"><div class="lab"><span>exposure</span><span class="val">330</span></div><div class="track"><div class="fill" style="width:13%"></div></div></div>
+        <div class="row"><div class="lab"><span>whitebal</span><span class="val">5100</span></div><div class="track"><div class="fill" style="width:39%"></div></div></div>
+        <div class="foot"><span class="btn">auto</span><span class="btn pri">reset</span></div>
+      </div>
+    </div>
+    <div class="meta">
+      <p class="num">04</p>
+      <h2>Terminal</h2>
+      <p class="register">Utility · keyboard-first</p>
+      <p>Phosphor green on black, sliders drawn as ASCII-style bar meters. Wears the fact that this is a CLI underneath as a badge. For the register where the tool feels like it belongs to whoever reads man pages for fun.</p>
+      <div class="specs">
+        <div class="swatches"><span class="sw" style="background:#0a0e0a"></span><span class="sw" style="background:#4ade4a"></span><span class="sw" style="background:#b6f0b6"></span><span class="sw" style="background:#2a5a2a"></span></div>
+        <span class="typespec"><b>SF Mono</b> · bar meters</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- D5 -->
+  <section class="dir">
+    <div class="mockup-col">
+      <div class="pop d5">
+        <div class="top"><div class="dev"><span class="dot"></span><span class="name">Meet 2</span></div><span class="status">On</span></div>
+        <div class="row"><div class="lab"><span>Zoom</span><span class="val">40</span></div><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div></div>
+        <div class="row"><div class="lab"><span>Exposure</span><span class="val">330</span></div><div class="track"><div class="fill" style="width:13%"></div><div class="knob" style="left:13%"></div></div></div>
+        <div class="row"><div class="lab"><span>Warmth</span><span class="val">5100K</span></div><div class="track"><div class="fill" style="width:39%"></div><div class="knob" style="left:39%"></div></div></div>
+        <div class="foot"><span class="btn">Auto</span><span class="btn pri">Reset</span></div>
+      </div>
+    </div>
+    <div class="meta">
+      <p class="num">05</p>
+      <h2>Soft Touch</h2>
+      <p class="register">Consumer · friendly</p>
+      <p>Rounded, pillowy, a lavender accent and soft-shadow controls that look pressable. Plain-language labels ("Warmth" not "White balance"). The most approachable direction, for a tool anyone could open without knowing what a Kelvin is.</p>
+      <div class="specs">
+        <div class="swatches"><span class="sw" style="background:#eef0f6"></span><span class="sw" style="background:#8b7fe0"></span><span class="sw" style="background:#b3a9f0"></span><span class="sw" style="background:#3a3f52"></span></div>
+        <span class="typespec"><b>SF Pro</b> · soft shadows</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>Mockups are static previews at ~300px popover width. Real panel binds to the obsbot CLI. Pick one and I build it.</footer>
+</div>

@@ -3,6 +3,7 @@
 #import <IOKit/IOKitLib.h>
 #import <IOKit/usb/IOUSBLib.h>
 #import <VVUVCKit/VVUVCKit.h>
+#import <CoreAudio/CoreAudio.h>
 
 #define OBSBOT_VID 13668
 #define OBSBOT_PID 65275
@@ -123,10 +124,77 @@ static BOOL callBool(VVUVCController *c, SEL sel) {
     return result;
 }
 
+// ponytail: name-match device discovery instead of a stable ID; CoreAudio device IDs are ephemeral like locationIDs.
+static AudioObjectID findOBSBOTAudioDeviceID(void) {
+    AudioObjectPropertyAddress address = { kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr) return 0;
+    int count = size / sizeof(AudioObjectID);
+    AudioObjectID *ids = malloc(size);
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, ids) != noErr) {
+        free(ids);
+        return 0;
+    }
+
+    AudioObjectID found = 0;
+    for (int i = 0; i < count; i++) {
+        AudioObjectPropertyAddress nameAddr = { kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        CFStringRef nameRef = NULL;
+        UInt32 nameSize = sizeof(CFStringRef);
+        if (AudioObjectGetPropertyData(ids[i], &nameAddr, 0, NULL, &nameSize, &nameRef) != noErr || nameRef == NULL) continue;
+        NSString *name = (__bridge_transfer NSString *)nameRef;
+        if ([name rangeOfString:@"OBSBOT" options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
+
+        // Confirm it has input channels.
+        AudioObjectPropertyAddress streamAddr = { kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+        UInt32 streamSize = 0;
+        if (AudioObjectGetPropertyDataSize(ids[i], &streamAddr, 0, NULL, &streamSize) != noErr || streamSize == 0) continue;
+
+        found = ids[i];
+        break;
+    }
+    free(ids);
+    return found;
+}
+
+static BOOL audioHasProperty(AudioObjectID objID, AudioObjectPropertySelector selector) {
+    AudioObjectPropertyAddress address = { selector, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+    return AudioObjectHasProperty(objID, &address);
+}
+
+static Float32 audioGetVolume(AudioObjectID objID) {
+    AudioObjectPropertyAddress address = { kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+    Float32 value = 0;
+    UInt32 size = sizeof(Float32);
+    AudioObjectGetPropertyData(objID, &address, 0, NULL, &size, &value);
+    return value;
+}
+
+static void audioSetVolume(AudioObjectID objID, Float32 value) {
+    AudioObjectPropertyAddress address = { kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+    AudioObjectSetPropertyData(objID, &address, 0, NULL, sizeof(Float32), &value);
+}
+
+static BOOL audioGetMute(AudioObjectID objID) {
+    AudioObjectPropertyAddress address = { kAudioDevicePropertyMute, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+    UInt32 value = 0;
+    UInt32 size = sizeof(UInt32);
+    AudioObjectGetPropertyData(objID, &address, 0, NULL, &size, &value);
+    return value == 1;
+}
+
+static void audioSetMute(AudioObjectID objID, BOOL mute) {
+    AudioObjectPropertyAddress address = { kAudioDevicePropertyMute, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+    UInt32 value = mute ? 1 : 0;
+    AudioObjectSetPropertyData(objID, &address, 0, NULL, sizeof(UInt32), &value);
+}
+
 static void printUsage(void) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  obsbot get\n");
     fprintf(stderr, "  obsbot set <name> <value|auto>\n");
+    fprintf(stderr, "  obsbot set micvolume <0-100>\n");
+    fprintf(stderr, "  obsbot set mic <mute|unmute>\n");
     fprintf(stderr, "  obsbot reset\n");
     fprintf(stderr, "Names: zoom, focus, exposure, brightness, contrast, saturation, sharpness, gain, whitebalance\n");
 }
@@ -174,6 +242,17 @@ int main(int argc, const char *argv[]) {
                 }
                 printf("%s\n", [line UTF8String]);
             }
+
+            AudioObjectID audioID = findOBSBOTAudioDeviceID();
+            if (audioID != 0) {
+                if (audioHasProperty(audioID, kAudioDevicePropertyVolumeScalar)) {
+                    int pct = (int)(audioGetVolume(audioID) * 100.0f + 0.5f);
+                    printf("mic volume: %d%% (0-100)\n", pct);
+                }
+                if (audioHasProperty(audioID, kAudioDevicePropertyMute)) {
+                    printf("mic: %s\n", audioGetMute(audioID) ? "muted" : "unmuted");
+                }
+            }
             return 0;
         }
 
@@ -190,6 +269,53 @@ int main(int argc, const char *argv[]) {
             }
             NSString *name = [NSString stringWithUTF8String:argv[2]];
             NSString *valStr = [NSString stringWithUTF8String:argv[3]];
+
+            if ([name caseInsensitiveCompare:@"micvolume"] == NSOrderedSame) {
+                AudioObjectID audioID = findOBSBOTAudioDeviceID();
+                if (audioID == 0) {
+                    fprintf(stderr, "Error: no OBSBOT microphone found via CoreAudio.\n");
+                    return 1;
+                }
+                if (!audioHasProperty(audioID, kAudioDevicePropertyVolumeScalar)) {
+                    fprintf(stderr, "Error: mic volume is not supported by this device.\n");
+                    return 1;
+                }
+                long value = [valStr integerValue];
+                long clamped = value;
+                if (clamped < 0) clamped = 0;
+                if (clamped > 100) clamped = 100;
+                audioSetVolume(audioID, (Float32)clamped / 100.0f);
+                if (clamped != value) {
+                    printf("Set mic volume to %ld%% (clamped from %ld, range 0-100).\n", clamped, value);
+                } else {
+                    printf("Set mic volume to %ld%%.\n", clamped);
+                }
+                return 0;
+            }
+
+            if ([name caseInsensitiveCompare:@"mic"] == NSOrderedSame) {
+                AudioObjectID audioID = findOBSBOTAudioDeviceID();
+                if (audioID == 0) {
+                    fprintf(stderr, "Error: no OBSBOT microphone found via CoreAudio.\n");
+                    return 1;
+                }
+                if (!audioHasProperty(audioID, kAudioDevicePropertyMute)) {
+                    fprintf(stderr, "Error: mic mute is not supported by this device.\n");
+                    return 1;
+                }
+                if ([valStr caseInsensitiveCompare:@"mute"] == NSOrderedSame) {
+                    audioSetMute(audioID, YES);
+                    printf("Mic muted.\n");
+                    return 0;
+                } else if ([valStr caseInsensitiveCompare:@"unmute"] == NSOrderedSame) {
+                    audioSetMute(audioID, NO);
+                    printf("Mic unmuted.\n");
+                    return 0;
+                } else {
+                    fprintf(stderr, "Error: 'mic' accepts 'mute' or 'unmute'.\n");
+                    return 1;
+                }
+            }
 
             ControlEntry *e = findControl(name);
             if (e == NULL) {

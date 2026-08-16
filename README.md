@@ -10,9 +10,8 @@ settings are reachable without the vendor's software.
 
 ## Status
 
-- `obsbot` CLI: works. Controls zoom and all image settings.
+- `obsbot` CLI: works. Controls zoom, all image settings, and mic volume/mute.
 - Menubar GUI: planned.
-- Audio settings: under investigation (separate from the video/UVC layer).
 
 ## Controls
 
@@ -31,6 +30,18 @@ settings are reachable without the vendor's software.
 Pan/tilt are not exposed: the Meet 2 does framing digitally, not by moving the
 lens.
 
+## Audio
+
+Mic volume and mute are open, standard controls: macOS exposes them on any
+input device through CoreAudio, so `obsbot` talks to CoreAudio directly (no
+UVC, no vendor SDK). `obsbot set micvolume <0-100>` and
+`obsbot set mic <mute|unmute>` control the "OBSBOT Meet 2 Microphone" input
+device the same way the macOS Sound settings would.
+
+The OBSBOT app's AI noise-reduction and pickup-pattern (directionality) modes
+are proprietary vendor features, not standard CoreAudio controls, so they are
+not supported here by design.
+
 ## Build
 
 Requires the Xcode command-line tools (`clang`). The two frameworks are
@@ -47,6 +58,9 @@ vendored in `vendor/`, so no download is needed.
 ./obsbot set zoom 40            # set a control (clamps to range and tells you)
 ./obsbot set brightness 60
 ./obsbot set focus auto         # focus, exposure, whitebalance support "auto"
+./obsbot set micvolume 55       # mic input gain, 0-100
+./obsbot set mic mute           # mute/unmute the mic
+./obsbot set mic unmute
 ./obsbot reset                  # restore all controls to defaults
 ./obsbot                        # usage
 ```
