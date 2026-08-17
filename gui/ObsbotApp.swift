@@ -926,23 +926,61 @@ struct ApertureSlider: View {
     let label: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    // Amount one tap of the −/+ buttons nudges the value. The slider is for coarse travel;
+    // the steppers are for the finest meaningful adjustment (e.g. 50 K on white balance, where
+    // a 1 K step would be imperceptible). No hold-to-repeat: the intent is precise single nudges.
+    var step: Double = 1
     let format: (Double) -> String
     let onChange: (Double) -> Void
 
     private let trackHeight: CGFloat = 5
     private let knobSize: CGFloat = 15
 
+    // Move to the next grid multiple in the direction pressed: floor for increment so we
+    // always land at least one step above; ceil for decrement so we land at least one step
+    // below. This handles off-grid starting values (e.g. mic volume read back as 73%) without
+    // skipping the nearest clean multiple. Then clamp so fast repeated taps can't drift past
+    // the bounds. Route through onChange so a step behaves exactly like a drag — notably,
+    // stepping EXPOSURE / WHITE BALANCE drops the camera out of auto via the same setter.
+    private func nudge(_ direction: Double) {
+        let snapped = direction > 0
+            ? (floor(value / step) + 1) * step
+            : (ceil(value / step) - 1) * step
+        let clamped = min(max(snapped, range.lowerBound), range.upperBound)
+        guard clamped != value else { return }
+        value = clamped
+        onChange(clamped)
+    }
+
+    private func stepButton(_ symbol: String, _ direction: Double, disabled: Bool) -> some View {
+        Button(action: { nudge(direction) }) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(Aperture.accent)
+                .frame(width: 19, height: 19)
+                .background(Aperture.accent.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.3 : 1) // dim at the extreme so the limit reads as a limit
+        .help(direction < 0 ? "Decrease \(label.lowercased())" : "Increase \(label.lowercased())")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(label)
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundColor(Aperture.label)
                     .kerning(0.4)
-                Spacer()
+                Spacer(minLength: 6)
+                stepButton("minus", -1, disabled: value <= range.lowerBound)
                 Text(format(value))
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundColor(Aperture.value)
+                    .frame(minWidth: 42, alignment: .trailing) // stable width so the +/− don't shift as digits change
+                stepButton("plus", 1, disabled: value >= range.upperBound)
             }
             GeometryReader { geo in
                 let width = geo.size.width
@@ -1073,6 +1111,7 @@ struct PanelView: View {
             } else {
                 emptyState
             }
+            quitRow
         }
         .frame(width: 300)
         .background(
@@ -1169,13 +1208,13 @@ struct PanelView: View {
 
             VStack(spacing: 16) {
                 ApertureSlider(label: "ZOOM", value: $model.zoom, range: model.zoomRange,
-                               format: { "\(Int($0))" }, onChange: model.setZoom)
+                               step: 1, format: { "\(Int($0))" }, onChange: model.setZoom)
                 ApertureSlider(label: "EXPOSURE", value: $model.exposure, range: model.exposureRange,
-                               format: { "\(Int($0))" }, onChange: model.setExposure)
+                               step: 1, format: { "\(Int($0))" }, onChange: model.setExposure)
                 ApertureSlider(label: "WHITE BALANCE", value: $model.whiteBalance, range: model.whiteBalanceRange,
-                               format: { "\(Int($0)) K" }, onChange: model.setWhiteBalance)
+                               step: 50, format: { "\(Int($0)) K" }, onChange: model.setWhiteBalance)
                 ApertureSlider(label: "BRIGHTNESS", value: $model.brightness, range: model.brightnessRange,
-                               format: { "\(Int($0))" }, onChange: model.setBrightness)
+                               step: 1, format: { "\(Int($0))" }, onChange: model.setBrightness)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
@@ -1186,7 +1225,7 @@ struct PanelView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 12) {
                         ApertureSlider(label: "MIC", value: $model.micVolume, range: 0...100,
-                                       format: { "\(Int($0))%" }, onChange: model.setMicVolume)
+                                       step: 5, format: { "\(Int($0))%" }, onChange: model.setMicVolume)
 
                         Button(action: { model.setMicMuted(!model.micMuted) }) {
                             Image(systemName: model.micMuted ? "mic.slash.fill" : "mic.fill")
@@ -1274,6 +1313,30 @@ struct PanelView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 13)
+        }
+    }
+
+    // Always-present footer. This is an LSUIElement agent (no Dock icon, no app menu), so this
+    // button is the only way to quit — it lives in the outer body, outside the connected/empty
+    // branch, so it's reachable even when no camera is attached. Understated on purpose: quitting
+    // is a rare utility action, not a primary control.
+    private var quitRow: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle().fill(Aperture.hairline).frame(height: 1)
+            Button(action: { NSApplication.shared.terminate(nil) }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "power")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Quit OBSBOT Control")
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                }
+                .foregroundColor(Aperture.label)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 11)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Quit OBSBOT Control")
         }
     }
 
