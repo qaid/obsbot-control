@@ -1333,6 +1333,7 @@ struct PanelView: View {
                 .foregroundColor(Aperture.label)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
