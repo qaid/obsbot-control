@@ -215,6 +215,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     let session = AVCaptureSession()
     private var sessionConfigured = false
     private var loggedFirstFrame = false
+    var previewMirrorApplied = false // set once mirror is confirmed; reset in stopPreview so a fresh session re-applies
     private var frameTimeoutWork: DispatchWorkItem?
     private let videoQueue = DispatchQueue(label: "obsbot.preview") // sample-buffer delegate callbacks ONLY
     // ponytail: all AVCaptureSession mutation (beginConfiguration/addInput/addOutput/
@@ -370,6 +371,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         frameTimeoutWork?.cancel()
         sessionQueue.async { self.session.stopRunning() }
         previewState = .idle
+        previewMirrorApplied = false // reset so the next preview session re-applies mirroring
     }
 
     // ponytail: attaching a preview layer to the session is a session-GRAPH mutation
@@ -399,15 +401,21 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func applyPreviewMirror(to layer: AVCaptureVideoPreviewLayer, hostView: NSView) {
         sessionQueue.async {
             if let connection = layer.connection, connection.isVideoMirroringSupported {
-                if connection.isVideoMirrored { return } // already applied; connection route confirmed working
+                if connection.isVideoMirrored {
+                    // already applied; mark confirmed so updateNSView stops dispatching
+                    DispatchQueue.main.async { self.previewMirrorApplied = true }
+                    return
+                }
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = true
                 FileHandle.standardError.write("mirror: connection.isVideoMirrored=\(connection.isVideoMirrored)\n".data(using: .utf8)!)
+                DispatchQueue.main.async { self.previewMirrorApplied = true }
             } else {
                 DispatchQueue.main.async {
                     guard hostView.layer?.sublayerTransform.m11 != -1 else { return }
                     hostView.layer?.sublayerTransform = CATransform3DMakeScale(-1, 1, 1)
                     FileHandle.standardError.write("mirror: applied container transform (connection unavailable or unsupported)\n".data(using: .utf8)!)
+                    self.previewMirrorApplied = true
                 }
             }
         }
@@ -502,16 +510,20 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         DispatchQueue.main.async {
-            // A real frame is ground truth: the camera is ours and working, so recover even if the
-            // 5s timeout already flipped us to .inUse (a late first frame on the OBSBOT's cold start).
-            // Guard against .idle/.denied so a stray frame arriving after stopPreview can't resurrect
-            // a torn-down preview.
-            if self.previewState == .starting || self.previewState == .inUse {
-                self.previewState = .running
-            }
-            if !self.loggedFirstFrame {
-                self.loggedFirstFrame = true
-                FileHandle.standardError.write("preview: first frame received\n".data(using: .utf8)!)
+            // Only preview-output frames drive state recovery; keep-alive frames must not claim
+            // the preview is live (the keep-alive session delivers frames independently of the
+            // preview session). A preview frame is ground truth: the camera is ours and working,
+            // so recover even if the 5s timeout already flipped us to .inUse (a late first frame
+            // on the OBSBOT's cold start). Guard against .idle/.denied so a stray frame arriving
+            // after stopPreview can't resurrect a torn-down preview.
+            if output !== self.keepAliveOutput {
+                if self.previewState == .starting || self.previewState == .inUse {
+                    self.previewState = .running
+                }
+                if !self.loggedFirstFrame {
+                    self.loggedFirstFrame = true
+                    FileHandle.standardError.write("preview: first frame received\n".data(using: .utf8)!)
+                }
             }
             if output === self.keepAliveOutput, !self.loggedKeepAliveFrame {
                 self.loggedKeepAliveFrame = true
@@ -1026,7 +1038,9 @@ struct PreviewLayerView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         // The preview layer's connection isn't guaranteed to exist yet at makeNSView time
         // (it's created lazily once the session is configured), so re-attempt on every update
-        // pass; applyPreviewMirror no-ops once it has already mirrored successfully.
+        // pass until mirroring is confirmed; once previewMirrorApplied is set we stop dispatching
+        // to sessionQueue so rapid redraws (e.g. zoom-slider drag) don't flood it.
+        guard !model.previewMirrorApplied else { return }
         if let layer = nsView.layer as? AVCaptureVideoPreviewLayer {
             model.applyPreviewMirror(to: layer, hostView: nsView)
         }
