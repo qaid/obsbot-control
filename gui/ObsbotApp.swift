@@ -352,20 +352,65 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             self.session.startRunning()
         }
 
-        // No frames within 2.5s -> treat as "in use by another app".
+        // No frames within 5s -> provisionally show "in use by another app". This is only a guess:
+        // a frame arriving later flips the state back to .running (see captureOutput), because a real
+        // frame is proof the camera is ours and working. The OBSBOT Meet 2's first frame can lag a
+        // few seconds on a cold start (sensor/light warm-up), so the window is generous to avoid a
+        // spurious "in use" flash before the preview appears.
         frameTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.previewState == .starting else { return }
             self.previewState = .inUse
         }
         frameTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: work)
     }
 
     func stopPreview() {
         frameTimeoutWork?.cancel()
         sessionQueue.async { self.session.stopRunning() }
         previewState = .idle
+    }
+
+    // ponytail: attaching a preview layer to the session is a session-GRAPH mutation
+    // (AVCaptureVideoPreviewLayer(session:) internally runs begin/commitConfiguration). Doing it on
+    // the main thread while startRunning enumerates the session's connections on sessionQueue is the
+    // NSFastEnumerationMutation abort that crashed on the second popover open. So the layer is built
+    // empty on main (CALayer geometry keeps its main-thread affinity) and its `session` is assigned
+    // here on sessionQueue, serialized against every other session mutation. Async, never sync:
+    // callers are on the main thread and sessionQueue.sync would deadlock.
+    func attachPreviewLayer(_ layer: AVCaptureVideoPreviewLayer) {
+        sessionQueue.async { layer.session = self.session }
+    }
+
+    // Mirror the DISPLAYED preview only (selfie-view); capture output to other apps must be untouched.
+    // AVCaptureVideoPreviewLayer manages its own `transform` internally and overrides/ignores a
+    // manually-set layer transform, so that route silently does nothing (confirmed: preview stayed
+    // unmirrored). Instead we mirror via the preview layer's AVCaptureConnection (`isVideoMirrored`),
+    // which only affects what's displayed, not the session's captured/output frames. If the
+    // connection isn't available yet or doesn't support mirroring, we fall back to flipping the HOST
+    // NSView's layer (not the preview layer) via `sublayerTransform`, which the preview layer can't
+    // override since it's the parent's transform, not its own.
+    //
+    // Mirror config touches the preview layer's AVCaptureConnection, a session-graph mutation, so it
+    // runs on sessionQueue too. The host-view fallback is pure CALayer geometry and hops back to
+    // main. Idempotent: re-called on every updateNSView pass until the connection exists, then
+    // early-returns once mirrored.
+    func applyPreviewMirror(to layer: AVCaptureVideoPreviewLayer, hostView: NSView) {
+        sessionQueue.async {
+            if let connection = layer.connection, connection.isVideoMirroringSupported {
+                if connection.isVideoMirrored { return } // already applied; connection route confirmed working
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = true
+                FileHandle.standardError.write("mirror: connection.isVideoMirrored=\(connection.isVideoMirrored)\n".data(using: .utf8)!)
+            } else {
+                DispatchQueue.main.async {
+                    guard hostView.layer?.sublayerTransform.m11 != -1 else { return }
+                    hostView.layer?.sublayerTransform = CATransform3DMakeScale(-1, 1, 1)
+                    FileHandle.standardError.write("mirror: applied container transform (connection unavailable or unsupported)\n".data(using: .utf8)!)
+                }
+            }
+        }
     }
 
     @objc private func sessionRuntimeError(_ note: Notification) {
@@ -457,7 +502,13 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         DispatchQueue.main.async {
-            if self.previewState == .starting { self.previewState = .running }
+            // A real frame is ground truth: the camera is ours and working, so recover even if the
+            // 5s timeout already flipped us to .inUse (a late first frame on the OBSBOT's cold start).
+            // Guard against .idle/.denied so a stray frame arriving after stopPreview can't resurrect
+            // a torn-down preview.
+            if self.previewState == .starting || self.previewState == .inUse {
+                self.previewState = .running
+            }
             if !self.loggedFirstFrame {
                 self.loggedFirstFrame = true
                 FileHandle.standardError.write("preview: first frame received\n".data(using: .utf8)!)
@@ -956,44 +1007,28 @@ struct MicLevelMeter: View {
 // MARK: - Live preview layer (NSViewRepresentable wrapping AVCaptureVideoPreviewLayer)
 
 struct PreviewLayerView: NSViewRepresentable {
-    let session: AVCaptureSession
+    let model: CameraModel
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
-        let layer = AVCaptureVideoPreviewLayer(session: session)
+        // Build the layer empty on main (CALayer geometry is main-thread), then hand it to the model
+        // to assign `session` on sessionQueue — see attachPreviewLayer for why the session-graph
+        // mutation must not happen here on the main thread.
+        let layer = AVCaptureVideoPreviewLayer()
         layer.videoGravity = .resizeAspectFill
         view.layer = layer
-        applyMirror(to: layer, hostView: view)
+        model.attachPreviewLayer(layer)
+        model.applyPreviewMirror(to: layer, hostView: view)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         // The preview layer's connection isn't guaranteed to exist yet at makeNSView time
         // (it's created lazily once the session is configured), so re-attempt on every update
-        // pass; applyMirror no-ops once it has already mirrored successfully.
+        // pass; applyPreviewMirror no-ops once it has already mirrored successfully.
         if let layer = nsView.layer as? AVCaptureVideoPreviewLayer {
-            applyMirror(to: layer, hostView: nsView)
-        }
-    }
-
-    // Mirror the DISPLAYED preview only (selfie-view); capture output to other apps must be untouched.
-    // AVCaptureVideoPreviewLayer manages its own `transform` internally and overrides/ignores a
-    // manually-set layer transform, so that route silently does nothing (confirmed: preview stayed
-    // unmirrored). Instead we mirror via the preview layer's AVCaptureConnection
-    // (`isVideoMirrored`), which only affects what's displayed, not the session's captured/output
-    // frames. If the connection isn't available yet or doesn't support mirroring, we fall back to
-    // flipping the HOST NSView's layer (not the preview layer) via `sublayerTransform`, which the
-    // preview layer can't override since it's the parent's transform, not its own.
-    private func applyMirror(to layer: AVCaptureVideoPreviewLayer, hostView: NSView) {
-        if let connection = layer.connection, connection.isVideoMirroringSupported {
-            if connection.isVideoMirrored { return } // already applied; connection route confirmed working
-            connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = true
-            FileHandle.standardError.write("mirror: connection.isVideoMirrored=\(connection.isVideoMirrored)\n".data(using: .utf8)!)
-        } else if hostView.layer?.sublayerTransform.m11 != -1 {
-            hostView.layer?.sublayerTransform = CATransform3DMakeScale(-1, 1, 1)
-            FileHandle.standardError.write("mirror: applied container transform (connection unavailable or unsupported)\n".data(using: .utf8)!)
+            model.applyPreviewMirror(to: layer, hostView: nsView)
         }
     }
 }
@@ -1047,7 +1082,7 @@ struct PanelView: View {
             LinearGradient(colors: [Aperture.bgTop, Aperture.bgBottom], startPoint: .top, endPoint: .bottom)
             switch model.previewState {
             case .running, .starting:
-                PreviewLayerView(session: model.session)
+                PreviewLayerView(model: model)
             case .denied:
                 previewMessage("Grant camera access in System Settings\nto see the live preview.")
             case .inUse:
