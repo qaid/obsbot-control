@@ -240,8 +240,14 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     // (there are none today) beyond the Escape key itself.
     private var escapeMonitor: Any?
 
+    // Shared handle so the AppDelegate's reopen handler (a separate object from the SwiftUI
+    // App's @StateObject) can reach the live model. Weak: the StateObject owns it, this must not
+    // extend its lifetime or form a cycle.
+    static weak var current: CameraModel?
+
     override init() {
         super.init()
+        CameraModel.current = self
         // Read real values at launch so a headless run proves the camera link works (logged to stderr).
         refresh()
         NotificationCenter.default.addObserver(self, selector: #selector(sessionRuntimeError(_:)),
@@ -756,6 +762,20 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         } else if pinWindow?.isVisible == true {
             pinWindow?.orderOut(nil)
             panelDisappeared()
+        }
+    }
+
+    // Surface the control panel on demand (e.g. the user re-invokes the app from a launcher while
+    // it's already running). MenuBarExtra's popover has no public "open programmatically" API, so
+    // the visible surface we can reliably show is the floating pinned panel — same PanelView, it
+    // just floats until dismissed instead of closing on click-away. If it's already pinned, bring
+    // it forward rather than no-op (setPinned early-returns when the state is unchanged).
+    func showPanel() {
+        refresh()
+        if pinned {
+            pinWindow?.makeKeyAndOrderFront(nil)
+        } else {
+            setPinned(true)
         }
     }
 
@@ -1358,10 +1378,28 @@ struct PanelView: View {
     }
 }
 
+// MARK: - App delegate (reopen handling)
+
+// The whole reason this exists: a menu-bar / LSUIElement app has no ordinary window, so
+// re-invoking it from a launcher (Spotlight/Raycast/`open -a`) while it's already running does
+// nothing visible by default. AppKit still delivers a "reopen" to the running instance; we catch
+// it here and show the control panel so the launcher behaves like it would for a normal app.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        FileHandle.standardError.write("reopen: applicationShouldHandleReopen fired (hasVisibleWindows=\(flag))\n".data(using: .utf8)!)
+        // An accessory app won't come forward on its own; without this the panel can appear behind
+        // whatever the user is looking at.
+        NSApp.activate(ignoringOtherApps: true)
+        CameraModel.current?.showPanel()
+        return true
+    }
+}
+
 // MARK: - App
 
 @main
 struct ObsbotApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: CameraModel
 
     init() {
