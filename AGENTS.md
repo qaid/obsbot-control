@@ -2,6 +2,10 @@
 
 Guidance for any AI agent working in this repo (Claude Code, Codex, others). Single source of truth: `CLAUDE.md` imports this file, so edit here, not there.
 
+## Session start-up
+
+At the start of a session, read `codemap.md`. It describes how the project is built and how the pieces fit together, with `file:line` pointers to the CLI, the one-file GUI, the build scripts, and the vendored frameworks. Read it before you start work so you know where things live. If a change moves the pieces around, update `codemap.md` to match.
+
 ## What this project is
 
 `obsbot-control` controls an **OBSBOT Meet 2** webcam on macOS using only open-source code: no OBSBOT Center, no vendor SDK, no account. The camera is a standard UVC device; the app talks the UVC control protocol directly through the vendored [VVUVCKit](https://github.com/mrRay/VVUVCKit) framework, and mic controls via CoreAudio.
