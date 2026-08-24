@@ -197,6 +197,9 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private static var isLoginItemEnabled: Bool { SMAppService.mainApp.status == .enabled }
     @Published var launchAtLogin: Bool = CameraModel.isLoginItemEnabled
     private let keepAliveSession = AVCaptureSession()
+    // Seconds to keep the mic-alive stream open after IsRunningSomewhere goes false, so a brief
+    // probe/release or a switch between call apps doesn't force a teardown+rebuild. Tunable.
+    private let keepAliveStopDelay: TimeInterval = 3
     private var keepAliveConfigured = false
     private var keepAliveRunning = false
     // Cancellable hold-off before actually stopping the keep-alive session when
@@ -650,7 +653,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             pendingKeepAliveStop?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.stopKeepAliveSession() }
             pendingKeepAliveStop = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + keepAliveStopDelay, execute: work)
         }
     }
 
