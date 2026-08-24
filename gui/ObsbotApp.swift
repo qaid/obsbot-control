@@ -199,6 +199,10 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private let keepAliveSession = AVCaptureSession()
     private var keepAliveConfigured = false
     private var keepAliveRunning = false
+    // Cancellable hold-off before actually stopping the keep-alive session when
+    // IsRunningSomewhere goes false, so a brief probe/release or a switch between call apps
+    // doesn't tear the stream down and rebuild it.
+    private var pendingKeepAliveStop: DispatchWorkItem?
     private var micRunningSomewhereListenerInstalled = false
     // CoreAudio matches AudioObjectRemovePropertyListenerBlock to Add by exact block reference,
     // so the actual registered block (and the device ID it was registered against) must be kept
@@ -545,9 +549,18 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func setKeepMicLiveDuringCalls(_ on: Bool) {
         keepMicLiveDuringCalls = on
         if on {
+            // Pre-build the capture graph now (device discovery + addInput/addOutput +
+            // commitConfiguration) so the trigger path only has to call startRunning. This does
+            // NOT call startRunning, so the camera indicator light stays off until an app
+            // actually grabs the mic.
+            sessionQueue.async { [weak self] in
+                _ = self?.configureKeepAliveSessionIfNeeded()
+            }
             installMicRunningSomewhereListener()
         } else {
             removeMicRunningSomewhereListener()
+            pendingKeepAliveStop?.cancel()
+            pendingKeepAliveStop = nil
             stopKeepAliveSession()
         }
     }
@@ -626,9 +639,18 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         let running = value == 1
         FileHandle.standardError.write("keepalive: IsRunningSomewhere=\(running)\n".data(using: .utf8)!)
         if running {
+            pendingKeepAliveStop?.cancel()
+            pendingKeepAliveStop = nil
             startKeepAliveSession()
         } else {
-            stopKeepAliveSession()
+            // Don't tear the stream down immediately: a brief mic probe/release, or switching
+            // between call apps, can flip IsRunningSomewhere false-then-true within a second or
+            // two. Hold off a few seconds before actually stopping, and cancel the hold-off if
+            // IsRunningSomewhere comes back true first.
+            pendingKeepAliveStop?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.stopKeepAliveSession() }
+            pendingKeepAliveStop = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
         }
     }
 
@@ -659,6 +681,41 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         }
     }
 
+    // Must be called on sessionQueue. Builds the keep-alive session's capture graph (device
+    // discovery + beginConfiguration + addInput + addOutput + commitConfiguration) exactly once
+    // and leaves it configured but NOT running — beginConfiguration/commitConfiguration alone do
+    // not open the video stream, so this does not light the camera indicator. Returns whether the
+    // session is (now, or already) configured.
+    private func configureKeepAliveSessionIfNeeded() -> Bool {
+        if keepAliveConfigured { return true }
+        guard let device = findCaptureDevice() else {
+            FileHandle.standardError.write("keepalive: no OBSBOT video device found\n".data(using: .utf8)!)
+            return false
+        }
+        keepAliveSession.beginConfiguration()
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            // Multiple AVCaptureSessions can generally read one camera concurrently (this one
+            // deliberately overlaps with the preview session when both are active); if adding
+            // the input fails anyway, fail gracefully instead of crashing or wedging the toggle.
+            guard keepAliveSession.canAddInput(input) else { throw NSError(domain: "obsbot", code: 3) }
+            keepAliveSession.addInput(input)
+        } catch {
+            keepAliveSession.commitConfiguration()
+            FileHandle.standardError.write("keepalive: could not attach video input (\(error)); leaving mic possibly silent, toggle stays on and will retry on the next IsRunningSomewhere change\n".data(using: .utf8)!)
+            return false
+        }
+        // Throwaway output, no preview layer, no window: this session exists purely to keep
+        // the camera's video pipeline open so the mic carries real audio.
+        let output = AVCaptureVideoDataOutput()
+        output.setSampleBufferDelegate(self, queue: videoQueue)
+        if keepAliveSession.canAddOutput(output) { keepAliveSession.addOutput(output) }
+        keepAliveSession.commitConfiguration()
+        keepAliveOutput = output
+        keepAliveConfigured = true
+        return true
+    }
+
     private func startKeepAliveSessionAuthorized() {
         guard keepMicLiveDuringCalls, !keepAliveRunning else { return }
         loggedKeepAliveFrame = false
@@ -666,34 +723,9 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         FileHandle.standardError.write("keepalive: session starting\n".data(using: .utf8)!)
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if !self.keepAliveConfigured {
-                guard let device = self.findCaptureDevice() else {
-                    FileHandle.standardError.write("keepalive: no OBSBOT video device found\n".data(using: .utf8)!)
-                    DispatchQueue.main.async { self.keepAliveRunning = false }
-                    return
-                }
-                self.keepAliveSession.beginConfiguration()
-                do {
-                    let input = try AVCaptureDeviceInput(device: device)
-                    // Multiple AVCaptureSessions can generally read one camera concurrently (this one
-                    // deliberately overlaps with the preview session when both are active); if adding
-                    // the input fails anyway, fail gracefully instead of crashing or wedging the toggle.
-                    guard self.keepAliveSession.canAddInput(input) else { throw NSError(domain: "obsbot", code: 3) }
-                    self.keepAliveSession.addInput(input)
-                } catch {
-                    self.keepAliveSession.commitConfiguration()
-                    FileHandle.standardError.write("keepalive: could not attach video input (\(error)); leaving mic possibly silent, toggle stays on and will retry on the next IsRunningSomewhere change\n".data(using: .utf8)!)
-                    DispatchQueue.main.async { self.keepAliveRunning = false }
-                    return
-                }
-                // Throwaway output, no preview layer, no window: this session exists purely to keep
-                // the camera's video pipeline open so the mic carries real audio.
-                let output = AVCaptureVideoDataOutput()
-                output.setSampleBufferDelegate(self, queue: self.videoQueue)
-                if self.keepAliveSession.canAddOutput(output) { self.keepAliveSession.addOutput(output) }
-                self.keepAliveSession.commitConfiguration()
-                self.keepAliveOutput = output
-                self.keepAliveConfigured = true
+            guard self.configureKeepAliveSessionIfNeeded() else {
+                DispatchQueue.main.async { self.keepAliveRunning = false }
+                return
             }
             self.keepAliveSession.startRunning()
         }
