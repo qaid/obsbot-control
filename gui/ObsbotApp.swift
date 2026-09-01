@@ -958,20 +958,38 @@ struct ApertureToggleStyle: ToggleStyle {
         HStack {
             configuration.label
             Spacer()
+            AperturePillButton(isOn: configuration.isOn) { configuration.isOn.toggle() }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// Separate struct so it can hold @FocusState (ToggleStyle.makeBody can't).
+private struct AperturePillButton: View {
+    let isOn: Bool
+    let action: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: action) {
             Capsule()
-                .fill(configuration.isOn ? Aperture.accent.opacity(0.85) : Color.black.opacity(0.35))
+                .fill(isOn ? Aperture.accent.opacity(0.85) : Color.black.opacity(0.35))
                 .frame(width: 34, height: 19)
                 .overlay(
                     Circle()
                         .fill(Aperture.knob)
                         .frame(width: 15, height: 15)
                         .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
-                        .offset(x: configuration.isOn ? 7.5 : -7.5)
+                        .offset(x: isOn ? 7.5 : -7.5)
                 )
-                .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
+                .overlay(
+                    Capsule().stroke(Aperture.accent, lineWidth: focused ? 2 : 0)
+                        .padding(-2)
+                )
+                .animation(.easeInOut(duration: 0.15), value: isOn)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { configuration.isOn.toggle() }
+        .buttonStyle(.plain)
+        .focused($focused)
     }
 }
 
@@ -990,6 +1008,7 @@ struct ApertureSlider: View {
 
     private let trackHeight: CGFloat = 5
     private let knobSize: CGFloat = 15
+    @FocusState private var trackFocused: Bool
 
     // Move to the next grid multiple in the direction pressed: floor for increment so we
     // always land at least one step above; ceil for decrement so we land at least one step
@@ -1054,6 +1073,7 @@ struct ApertureSlider: View {
                     Circle()
                         .fill(Aperture.knob)
                         .overlay(Circle().stroke(Aperture.accent, lineWidth: 2))
+                        .overlay(Circle().stroke(Aperture.accent, lineWidth: trackFocused ? 2 : 0).padding(-3))
                         .frame(width: knobSize, height: knobSize)
                         .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
                         .position(x: x, y: geo.size.height / 2)
@@ -1065,6 +1085,18 @@ struct ApertureSlider: View {
                     value = v
                     onChange(v)
                 })
+                .focusable()
+                .focused($trackFocused)
+                .onMoveCommand { direction in
+                    if direction == .left { nudge(-1) }
+                    if direction == .right { nudge(1) }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(label)
+                .accessibilityValue(format(value))
+                .accessibilityAdjustableAction { direction in
+                    nudge(direction == .increment ? 1 : -1)
+                }
             }
             .frame(height: knobSize)
         }
