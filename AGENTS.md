@@ -35,7 +35,7 @@ vendor/         VVUVCKit + USBBusProber frameworks (do not edit)
 ## Building
 
 - CLI: `./build.sh` (needs Xcode command-line tools; frameworks are vendored, no download).
-- GUI: `cd gui && ./build.sh`; add `--install` to also copy the app to `~/Applications`. Plain `swiftc`, no Xcode project. Target `arm64-apple-macos13.0`, bundle id `design.constellation.obsbot-control`, `LSUIElement` agent app.
+- GUI: `cd gui && ./build.sh`; add `--install` to also copy the app to `/Applications`. Plain `swiftc`, no Xcode project. Target `arm64-apple-macos13.0`, bundle id `design.constellation.obsbot-control`, `LSUIElement` agent app.
 
 The commands are the source of truth; if they change, the scripts change, not this file.
 

@@ -239,6 +239,14 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var pinned = false
     private var pinWindow: NSWindow?
 
+    // AppKit refuses key-window status to a borderless NSWindow unless told otherwise; without
+    // key status the window never gets a first responder, so no keyboard input (Tab, arrows,
+    // Space) reaches any control inside it. This subclass is the override that makes the pin
+    // window keyboard-usable.
+    private final class KeyableBorderlessWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+    }
+
     // MARK: Escape-to-close
     // ponytail: one local keyDown monitor (keyCode 53 == Escape) covers both display modes
     // instead of subclassing NSWindow/NSView for cancelOperation(_:) — simpler, and it's already
@@ -757,7 +765,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         pinned = on
         if on {
             if pinWindow == nil {
-                let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 480),
+                let win = KeyableBorderlessWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 480),
                                    styleMask: [.borderless], backing: .buffered, defer: false)
                 win.isOpaque = false
                 win.backgroundColor = .clear
@@ -778,7 +786,14 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 }
                 pinWindow = win
             }
-            pinWindow?.orderFront(nil)
+            // An accessory app (.accessory activation policy, no Dock icon) isn't handed key
+            // status just because its window calls makeKeyAndOrderFront — macOS only gives key
+            // window to the active app. Without this, whatever app was active before the pin
+            // button was clicked stays key, and the pin window never gets keyboard input at all.
+            // NSApp.activate(ignoringOtherApps:) is deprecated on macOS 14 and was observed to be
+            // ignored here (app stayed inactive); the NSRunningApplication form does take effect.
+            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+            pinWindow?.makeKeyAndOrderFront(nil)
             panelAppeared() // window content counts as a visible panel (orderOut won't fire onDisappear)
             FileHandle.standardError.write("pin: floating window shown, level==.floating: \(pinWindow?.level == .floating)\n".data(using: .utf8)!)
             // Dismiss the MenuBarExtra popover so only the floating window remains visible.
@@ -808,6 +823,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func showPanel() {
         refresh()
         if pinned {
+            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
             pinWindow?.makeKeyAndOrderFront(nil)
         } else {
             setPinned(true)
@@ -1469,6 +1485,12 @@ struct PanelView: View {
 // nothing visible by default. AppKit still delivers a "reopen" to the running instance; we catch
 // it here and show the control panel so the launcher behaves like it would for a normal app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Show the panel on launch too, so opening the app from Spotlight/Finder gives the user
+    // something visible right away instead of only a new menu-bar icon.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async { CameraModel.current?.showPanel() }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         FileHandle.standardError.write("reopen: applicationShouldHandleReopen fired (hasVisibleWindows=\(flag))\n".data(using: .utf8)!)
         // An accessory app won't come forward on its own; without this the panel can appear behind

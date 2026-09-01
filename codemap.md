@@ -60,7 +60,7 @@ Deliberately one file, one `ObservableObject` + one main view (see the ponytail 
   - Builds `OBSBOT Control.app` bundle by hand: copies `design/AppIcon.icns` and the two vendor frameworks into the bundle, compiles `ObsbotApp.swift` with `-import-objc-header Bridging.h -F ../vendor -framework VVUVCKit ...`, target `arm64-apple-macos13.0`.
   - Writes `Info.plist` inline (bundle id `design.constellation.obsbot-control`, `LSUIElement=true`, camera/mic usage strings).
   - Ad-hoc codesigns (`codesign --force --deep -s -`).
-  - `--install` additionally copies the built app to `~/Applications` (for Spotlight/Raycast) and re-signs it there.
+  - `--install` additionally copies the built app to `/Applications` (for Spotlight/Raycast) and re-signs it there.
 - Both build scripts are the source of truth for build details; if this doc and a script disagree, trust the script.
 
 ## 5. Data flow: control command → device
