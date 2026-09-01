@@ -100,7 +100,7 @@ cd gui && ./build.sh
 ```
 
 This produces `OBSBOT Control.app` in `gui/`. Run `./build.sh --install` to
-also copy it to `~/Applications`, so Spotlight and Raycast can find it. The
+also copy it to `/Applications`, so Spotlight and Raycast can find it. The
 icon is generated from `design/appicon.svg` via `design/make-icon.sh` (needs
 `cairosvg`) into `design/AppIcon.icns`, but the `.icns` is committed, so a
 normal build doesn't need a rasterizer.

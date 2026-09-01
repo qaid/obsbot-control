@@ -51,11 +51,11 @@ codesign --force --deep -s - "$APP" 2>/dev/null || true
 
 echo "Built: $(pwd)/$APP"
 
-# Optional: ./build.sh --install copies the built app to ~/Applications for Spotlight/Raycast.
+# Optional: ./build.sh --install copies the built app to /Applications for Spotlight/Raycast.
 if [ "$1" = "--install" ]; then
-  mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/$APP"
-  cp -R "$APP" "$HOME/Applications/$APP"
-  codesign --force --deep -s - "$HOME/Applications/$APP" 2>/dev/null || true
-  echo "Installed: $HOME/Applications/$APP"
+  mkdir -p "/Applications"
+  rm -rf "/Applications/$APP"
+  cp -R "$APP" "/Applications/$APP"
+  codesign --force --deep -s - "/Applications/$APP" 2>/dev/null || true
+  echo "Installed: /Applications/$APP"
 fi

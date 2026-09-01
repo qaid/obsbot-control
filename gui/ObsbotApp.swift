@@ -239,6 +239,23 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var pinned = false
     private var pinWindow: NSWindow?
 
+    // AppKit refuses key-window status to a borderless NSWindow unless told otherwise; without
+    // key status the window never gets a first responder, so no keyboard input (Tab, arrows,
+    // Space) reaches any control inside it. This subclass is the override that makes the pin
+    // window keyboard-usable.
+    private final class KeyableBorderlessWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+    }
+
+    // An accessory app (.accessory policy, no Dock icon) isn't handed key status just because a
+    // window calls makeKeyAndOrderFront — macOS only gives key window to the active app.
+    // NSApp.activate(ignoringOtherApps:) is deprecated on macOS 14 and was observed to be ignored
+    // here (app stayed inactive); the NSRunningApplication form does take effect.
+    private func bringPinWindowForward() {
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        pinWindow?.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: Escape-to-close
     // ponytail: one local keyDown monitor (keyCode 53 == Escape) covers both display modes
     // instead of subclassing NSWindow/NSView for cancelOperation(_:) — simpler, and it's already
@@ -757,7 +774,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         pinned = on
         if on {
             if pinWindow == nil {
-                let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 480),
+                let win = KeyableBorderlessWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 480),
                                    styleMask: [.borderless], backing: .buffered, defer: false)
                 win.isOpaque = false
                 win.backgroundColor = .clear
@@ -778,7 +795,8 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 }
                 pinWindow = win
             }
-            pinWindow?.orderFront(nil)
+            let priorKey = NSApp.keyWindow
+            bringPinWindowForward()
             panelAppeared() // window content counts as a visible panel (orderOut won't fire onDisappear)
             FileHandle.standardError.write("pin: floating window shown, level==.floating: \(pinWindow?.level == .floating)\n".data(using: .utf8)!)
             // Dismiss the MenuBarExtra popover so only the floating window remains visible.
@@ -788,14 +806,16 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 w.close()
             }
             // Fallback: some macOS versions back MenuBarExtra's popover with a window whose
-            // class name doesn't contain "MenuBarExtra"; closing the key window covers that case
-            // as long as it isn't the pin window itself.
-            if let key = NSApp.keyWindow, key !== self.pinWindow {
-                key.close()
+            // class name doesn't contain "MenuBarExtra"; close whatever was key BEFORE the pin
+            // window took key status, as long as it isn't the pin window itself.
+            if let priorKey, priorKey !== pinWindow {
+                priorKey.close()
             }
             FileHandle.standardError.write("pin: popover dismissed\n".data(using: .utf8)!)
         } else if pinWindow?.isVisible == true {
             pinWindow?.orderOut(nil)
+            // Activation was taken in bringPinWindowForward(); hand focus back to the app the user was in.
+            NSApp.deactivate()
             panelDisappeared()
         }
     }
@@ -808,7 +828,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func showPanel() {
         refresh()
         if pinned {
-            pinWindow?.makeKeyAndOrderFront(nil)
+            bringPinWindowForward()
         } else {
             setPinned(true)
         }
@@ -958,20 +978,52 @@ struct ApertureToggleStyle: ToggleStyle {
         HStack {
             configuration.label
             Spacer()
+            AperturePillButton(isOn: configuration.isOn) { configuration.isOn.toggle() }
+        }
+        .contentShape(Rectangle())
+        // Restores whole-row click-to-toggle (label text included), matching pre-PR behavior;
+        // the AperturePillButton's own Button below still handles keyboard/Space activation.
+        // Not a double-toggle risk: a click landing on the Capsule is consumed by the Button
+        // itself (SwiftUI Button intercepts the tap before it reaches an ancestor's
+        // onTapGesture), so only clicks on the label/row area outside the button reach this.
+        .onTapGesture { configuration.isOn.toggle() }
+        // The label Text and the pill button are siblings, not label-inside-button, so without
+        // this VoiceOver would announce the button with no name. Combining reads them as one
+        // accessible element: "<label>, toggle, on/off".
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// Separate struct so it can hold @FocusState (ToggleStyle.makeBody can't).
+private struct AperturePillButton: View {
+    let isOn: Bool
+    let action: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: action) {
             Capsule()
-                .fill(configuration.isOn ? Aperture.accent.opacity(0.85) : Color.black.opacity(0.35))
+                .fill(isOn ? Aperture.accent.opacity(0.85) : Color.black.opacity(0.35))
                 .frame(width: 34, height: 19)
                 .overlay(
                     Circle()
                         .fill(Aperture.knob)
                         .frame(width: 15, height: 15)
                         .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
-                        .offset(x: configuration.isOn ? 7.5 : -7.5)
+                        .offset(x: isOn ? 7.5 : -7.5)
                 )
-                .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
+                .overlay(
+                    Capsule().stroke(Aperture.accent, lineWidth: focused ? 2 : 0)
+                        .padding(-2)
+                )
+                .animation(.easeInOut(duration: 0.15), value: isOn)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { configuration.isOn.toggle() }
+        .buttonStyle(.plain)
+        .focused($focused)
+        // Plain Button (not SwiftUI's Toggle) has no built-in on/off announcement, so state it
+        // explicitly; combined with the sibling label via ApertureToggleStyle's
+        // .accessibilityElement(children: .combine), VoiceOver reads "<label>, toggle, on/off".
+        .accessibilityValue(isOn ? "on" : "off")
     }
 }
 
@@ -983,13 +1035,17 @@ struct ApertureSlider: View {
     let range: ClosedRange<Double>
     // Amount one tap of the −/+ buttons nudges the value. The slider is for coarse travel;
     // the steppers are for the finest meaningful adjustment (e.g. 50 K on white balance, where
-    // a 1 K step would be imperceptible). No hold-to-repeat: the intent is precise single nudges.
+    // a 1 K step would be imperceptible). No hold-to-repeat on the stepper buttons: the intent
+    // there is precise single nudges. Arrow-key repeat via onMoveCommand on the slider track
+    // (below) is exempt from this — standard OS key-repeat on a focused control is expected
+    // behavior, not a bug, so it's left as-is rather than suppressed.
     var step: Double = 1
     let format: (Double) -> String
     let onChange: (Double) -> Void
 
     private let trackHeight: CGFloat = 5
     private let knobSize: CGFloat = 15
+    @FocusState private var trackFocused: Bool
 
     // Move to the next grid multiple in the direction pressed: floor for increment so we
     // always land at least one step above; ceil for decrement so we land at least one step
@@ -1054,6 +1110,7 @@ struct ApertureSlider: View {
                     Circle()
                         .fill(Aperture.knob)
                         .overlay(Circle().stroke(Aperture.accent, lineWidth: 2))
+                        .overlay(Circle().stroke(Aperture.accent, lineWidth: trackFocused ? 2 : 0).padding(-3))
                         .frame(width: knobSize, height: knobSize)
                         .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
                         .position(x: x, y: geo.size.height / 2)
@@ -1065,6 +1122,18 @@ struct ApertureSlider: View {
                     value = v
                     onChange(v)
                 })
+                .focusable()
+                .focused($trackFocused)
+                .onMoveCommand { direction in
+                    if direction == .left { nudge(-1) }
+                    if direction == .right { nudge(1) }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(label)
+                .accessibilityValue(format(value))
+                .accessibilityAdjustableAction { direction in
+                    nudge(direction == .increment ? 1 : -1)
+                }
             }
             .frame(height: knobSize)
         }
@@ -1420,11 +1489,21 @@ struct PanelView: View {
 // nothing visible by default. AppKit still delivers a "reopen" to the running instance; we catch
 // it here and show the control panel so the launcher behaves like it would for a normal app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Show the panel on launch too, so opening the app from Spotlight/Finder gives the user
+    // something visible right away instead of only a new menu-bar icon.
+    //
+    // A login-item launch (Launch at login toggle, SMAppService) must stay quiet: no floating
+    // panel over the user's work and no camera preview (light) at every login. Only a launch the
+    // user made (Spotlight, Finder, `open -a`) shows the panel.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAtLogin = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == DescType(keyAELaunchedAsLogInItem)
+        if launchedAtLogin { return }
+        DispatchQueue.main.async { CameraModel.current?.showPanel() }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         FileHandle.standardError.write("reopen: applicationShouldHandleReopen fired (hasVisibleWindows=\(flag))\n".data(using: .utf8)!)
-        // An accessory app won't come forward on its own; without this the panel can appear behind
-        // whatever the user is looking at.
-        NSApp.activate(ignoringOtherApps: true)
         CameraModel.current?.showPanel()
         return true
     }
