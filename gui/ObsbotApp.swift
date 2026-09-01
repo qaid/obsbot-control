@@ -247,6 +247,15 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         override var canBecomeKey: Bool { true }
     }
 
+    // An accessory app (.accessory policy, no Dock icon) isn't handed key status just because a
+    // window calls makeKeyAndOrderFront — macOS only gives key window to the active app.
+    // NSApp.activate(ignoringOtherApps:) is deprecated on macOS 14 and was observed to be ignored
+    // here (app stayed inactive); the NSRunningApplication form does take effect.
+    private func bringPinWindowForward() {
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        pinWindow?.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: Escape-to-close
     // ponytail: one local keyDown monitor (keyCode 53 == Escape) covers both display modes
     // instead of subclassing NSWindow/NSView for cancelOperation(_:) — simpler, and it's already
@@ -786,14 +795,8 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 }
                 pinWindow = win
             }
-            // An accessory app (.accessory activation policy, no Dock icon) isn't handed key
-            // status just because its window calls makeKeyAndOrderFront — macOS only gives key
-            // window to the active app. Without this, whatever app was active before the pin
-            // button was clicked stays key, and the pin window never gets keyboard input at all.
-            // NSApp.activate(ignoringOtherApps:) is deprecated on macOS 14 and was observed to be
-            // ignored here (app stayed inactive); the NSRunningApplication form does take effect.
-            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-            pinWindow?.makeKeyAndOrderFront(nil)
+            let priorKey = NSApp.keyWindow
+            bringPinWindowForward()
             panelAppeared() // window content counts as a visible panel (orderOut won't fire onDisappear)
             FileHandle.standardError.write("pin: floating window shown, level==.floating: \(pinWindow?.level == .floating)\n".data(using: .utf8)!)
             // Dismiss the MenuBarExtra popover so only the floating window remains visible.
@@ -803,14 +806,16 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 w.close()
             }
             // Fallback: some macOS versions back MenuBarExtra's popover with a window whose
-            // class name doesn't contain "MenuBarExtra"; closing the key window covers that case
-            // as long as it isn't the pin window itself.
-            if let key = NSApp.keyWindow, key !== self.pinWindow {
-                key.close()
+            // class name doesn't contain "MenuBarExtra"; close whatever was key BEFORE the pin
+            // window took key status, as long as it isn't the pin window itself.
+            if let priorKey, priorKey !== pinWindow {
+                priorKey.close()
             }
             FileHandle.standardError.write("pin: popover dismissed\n".data(using: .utf8)!)
         } else if pinWindow?.isVisible == true {
             pinWindow?.orderOut(nil)
+            // Activation was taken in bringPinWindowForward(); hand focus back to the app the user was in.
+            NSApp.deactivate()
             panelDisappeared()
         }
     }
@@ -823,8 +828,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     func showPanel() {
         refresh()
         if pinned {
-            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-            pinWindow?.makeKeyAndOrderFront(nil)
+            bringPinWindowForward()
         } else {
             setPinned(true)
         }
@@ -1487,15 +1491,19 @@ struct PanelView: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     // Show the panel on launch too, so opening the app from Spotlight/Finder gives the user
     // something visible right away instead of only a new menu-bar icon.
+    //
+    // A login-item launch (Launch at login toggle, SMAppService) must stay quiet: no floating
+    // panel over the user's work and no camera preview (light) at every login. Only a launch the
+    // user made (Spotlight, Finder, `open -a`) shows the panel.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAtLogin = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == DescType(keyAELaunchedAsLogInItem)
+        if launchedAtLogin { return }
         DispatchQueue.main.async { CameraModel.current?.showPanel() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         FileHandle.standardError.write("reopen: applicationShouldHandleReopen fired (hasVisibleWindows=\(flag))\n".data(using: .utf8)!)
-        // An accessory app won't come forward on its own; without this the panel can appear behind
-        // whatever the user is looking at.
-        NSApp.activate(ignoringOtherApps: true)
         CameraModel.current?.showPanel()
         return true
     }
