@@ -961,6 +961,16 @@ struct ApertureToggleStyle: ToggleStyle {
             AperturePillButton(isOn: configuration.isOn) { configuration.isOn.toggle() }
         }
         .contentShape(Rectangle())
+        // Restores whole-row click-to-toggle (label text included), matching pre-PR behavior;
+        // the AperturePillButton's own Button below still handles keyboard/Space activation.
+        // Not a double-toggle risk: a click landing on the Capsule is consumed by the Button
+        // itself (SwiftUI Button intercepts the tap before it reaches an ancestor's
+        // onTapGesture), so only clicks on the label/row area outside the button reach this.
+        .onTapGesture { configuration.isOn.toggle() }
+        // The label Text and the pill button are siblings, not label-inside-button, so without
+        // this VoiceOver would announce the button with no name. Combining reads them as one
+        // accessible element: "<label>, toggle, on/off".
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -990,6 +1000,10 @@ private struct AperturePillButton: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
+        // Plain Button (not SwiftUI's Toggle) has no built-in on/off announcement, so state it
+        // explicitly; combined with the sibling label via ApertureToggleStyle's
+        // .accessibilityElement(children: .combine), VoiceOver reads "<label>, toggle, on/off".
+        .accessibilityValue(isOn ? "on" : "off")
     }
 }
 
@@ -1001,7 +1015,10 @@ struct ApertureSlider: View {
     let range: ClosedRange<Double>
     // Amount one tap of the −/+ buttons nudges the value. The slider is for coarse travel;
     // the steppers are for the finest meaningful adjustment (e.g. 50 K on white balance, where
-    // a 1 K step would be imperceptible). No hold-to-repeat: the intent is precise single nudges.
+    // a 1 K step would be imperceptible). No hold-to-repeat on the stepper buttons: the intent
+    // there is precise single nudges. Arrow-key repeat via onMoveCommand on the slider track
+    // (below) is exempt from this — standard OS key-repeat on a focused control is expected
+    // behavior, not a bug, so it's left as-is rather than suppressed.
     var step: Double = 1
     let format: (Double) -> String
     let onChange: (Double) -> Void
