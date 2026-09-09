@@ -276,6 +276,52 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         refresh()
         NotificationCenter.default.addObserver(self, selector: #selector(sessionRuntimeError(_:)),
                                                name: .AVCaptureSessionRuntimeError, object: session)
+        installDeviceListListener()
+    }
+
+    // CoreAudio device IDs (and the AVCaptureDevice behind the keep-alive input) die on every
+    // sleep/undock/hub reset and come back under new IDs. Without this, a long-running app keeps
+    // its IsRunningSomewhere listener bound to a dead ID and never reacts again. Lives for the
+    // app's lifetime; never removed.
+    private func installDeviceListListener() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                                  mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.handleDeviceListChanged() }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, micListenerQueue, block)
+        guard status == noErr else {
+            FileHandle.standardError.write("devices: failed to install list listener, status=\(status)\n".data(using: .utf8)!)
+            return
+        }
+        FileHandle.standardError.write("devices: list listener installed\n".data(using: .utf8)!)
+    }
+
+    private func handleDeviceListChanged() {
+        // The device list changes for AirPods, HDMI audio, any USB dongle. Only act when the
+        // OBSBOT's own audio ID changed (gone, back, or renumbered); otherwise a mid-call
+        // teardown would silence the mic and blink the light for no reason.
+        let newID = findOBSBOTAudioDeviceID()
+        guard newID != audioDeviceID else { return }
+        FileHandle.standardError.write("devices: OBSBOT audio ID \(audioDeviceID) -> \(newID), re-discovering\n".data(using: .utf8)!)
+        // Drop the keep-alive graph: its AVCaptureDeviceInput references the old device object.
+        pendingKeepAliveStop?.cancel()
+        pendingKeepAliveStop = nil
+        stopKeepAliveSession()
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.keepAliveSession.beginConfiguration()
+            self.keepAliveSession.inputs.forEach { self.keepAliveSession.removeInput($0) }
+            self.keepAliveSession.outputs.forEach { self.keepAliveSession.removeOutput($0) }
+            self.keepAliveSession.commitConfiguration()
+            self.keepAliveConfigured = false
+            if self.keepMicLiveDuringCalls { _ = self.configureKeepAliveSessionIfNeeded() }
+        }
+        // refreshMic() re-arms the IsRunningSomewhere listener only when it finds the device, so
+        // drop the old (dead-ID) listener here first; this covers the unplug case too.
+        removeMicRunningSomewhereListener()
+        refreshMic()
     }
 
     // Reference-count panel appearances: the popover and the pinned window share the session.
