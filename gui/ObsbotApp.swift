@@ -276,6 +276,40 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         refresh()
         NotificationCenter.default.addObserver(self, selector: #selector(sessionRuntimeError(_:)),
                                                name: .AVCaptureSessionRuntimeError, object: session)
+        installDeviceListListener()
+    }
+
+    // CoreAudio device IDs (and the AVCaptureDevice behind the keep-alive input) die on every
+    // sleep/undock/hub reset and come back under new IDs. Without this, a long-running app keeps
+    // its IsRunningSomewhere listener bound to a dead ID and never reacts again. Lives for the
+    // app's lifetime; never removed.
+    private func installDeviceListListener() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                                  mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.handleDeviceListChanged() }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, micListenerQueue, block)
+        FileHandle.standardError.write("devices: list listener status=\(status)\n".data(using: .utf8)!)
+    }
+
+    private func handleDeviceListChanged() {
+        FileHandle.standardError.write("devices: list changed, re-discovering\n".data(using: .utf8)!)
+        // Drop the keep-alive graph: its AVCaptureDeviceInput references the old device object.
+        pendingKeepAliveStop?.cancel()
+        pendingKeepAliveStop = nil
+        stopKeepAliveSession()
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.keepAliveSession.beginConfiguration()
+            self.keepAliveSession.inputs.forEach { self.keepAliveSession.removeInput($0) }
+            self.keepAliveSession.outputs.forEach { self.keepAliveSession.removeOutput($0) }
+            self.keepAliveSession.commitConfiguration()
+            self.keepAliveConfigured = false
+            if self.keepMicLiveDuringCalls { _ = self.configureKeepAliveSessionIfNeeded() }
+        }
+        refreshMic() // re-arms the IsRunningSomewhere listener against the new ID (or clears it)
     }
 
     // Reference-count panel appearances: the popover and the pinned window share the session.
