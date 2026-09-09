@@ -291,11 +291,20 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             DispatchQueue.main.async { self?.handleDeviceListChanged() }
         }
         let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, micListenerQueue, block)
-        FileHandle.standardError.write("devices: list listener status=\(status)\n".data(using: .utf8)!)
+        guard status == noErr else {
+            FileHandle.standardError.write("devices: failed to install list listener, status=\(status)\n".data(using: .utf8)!)
+            return
+        }
+        FileHandle.standardError.write("devices: list listener installed\n".data(using: .utf8)!)
     }
 
     private func handleDeviceListChanged() {
-        FileHandle.standardError.write("devices: list changed, re-discovering\n".data(using: .utf8)!)
+        // The device list changes for AirPods, HDMI audio, any USB dongle. Only act when the
+        // OBSBOT's own audio ID changed (gone, back, or renumbered); otherwise a mid-call
+        // teardown would silence the mic and blink the light for no reason.
+        let newID = findOBSBOTAudioDeviceID()
+        guard newID != audioDeviceID else { return }
+        FileHandle.standardError.write("devices: OBSBOT audio ID \(audioDeviceID) -> \(newID), re-discovering\n".data(using: .utf8)!)
         // Drop the keep-alive graph: its AVCaptureDeviceInput references the old device object.
         pendingKeepAliveStop?.cancel()
         pendingKeepAliveStop = nil
@@ -309,7 +318,10 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             self.keepAliveConfigured = false
             if self.keepMicLiveDuringCalls { _ = self.configureKeepAliveSessionIfNeeded() }
         }
-        refreshMic() // re-arms the IsRunningSomewhere listener against the new ID (or clears it)
+        // refreshMic() re-arms the IsRunningSomewhere listener only when it finds the device, so
+        // drop the old (dead-ID) listener here first; this covers the unplug case too.
+        removeMicRunningSomewhereListener()
+        refreshMic()
     }
 
     // Reference-count panel appearances: the popover and the pinned window share the session.
