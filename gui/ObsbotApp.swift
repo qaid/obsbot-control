@@ -158,7 +158,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var brightness: Double = 50
 
     @Published var zoomRange: ClosedRange<Double> = 0...100
-    @Published var exposureRange: ClosedRange<Double> = 1...2500
+    // ponytail: the camera reports exposure 1-2500 (0.1 ms units), but past ~30 the image is
+    // fully washed out in normal room light. Cap the slider at 40 (a little headroom for dim
+    // rooms) so the useful range fills the track. GUI only; the CLI keeps the camera's range.
+    static let exposureCap: Double = 40
+    @Published var exposureRange: ClosedRange<Double> = 1...exposureCap
     @Published var whiteBalanceRange: ClosedRange<Double> = 2000...10000
     @Published var brightnessRange: ClosedRange<Double> = 0...100
 
@@ -902,7 +906,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         connected = true
 
         zoomRange = Double(c.minZoom())...Double(c.maxZoom())
-        exposureRange = Double(c.minExposureTime())...Double(c.maxExposureTime())
+        exposureRange = Double(c.minExposureTime())...min(Double(c.maxExposureTime()), Self.exposureCap)
         whiteBalanceRange = Double(c.minWhiteBalance())...Double(c.maxWhiteBalance())
         brightnessRange = Double(c.minBright())...Double(c.maxBright())
 
