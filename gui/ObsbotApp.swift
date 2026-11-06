@@ -908,8 +908,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         }
         connected = true
 
-        zoomRange = Double(c.minZoom())...min(Double(c.maxZoom()), Self.zoomCap)
-        exposureRange = Double(c.minExposureTime())...min(Double(c.maxExposureTime()), Self.exposureCap)
+        // max(lo, ...) keeps the range valid if a camera ever reports a minimum above a cap;
+        // a ClosedRange with lower > upper would crash.
+        let zoomLo = Double(c.minZoom()), expLo = Double(c.minExposureTime())
+        zoomRange = zoomLo...max(zoomLo, min(Double(c.maxZoom()), Self.zoomCap))
+        exposureRange = expLo...max(expLo, min(Double(c.maxExposureTime()), Self.exposureCap))
         whiteBalanceRange = Double(c.minWhiteBalance())...Double(c.maxWhiteBalance())
         brightnessRange = Double(c.minBright())...Double(c.maxBright())
 
